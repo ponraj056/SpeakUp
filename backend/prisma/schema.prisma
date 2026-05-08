@@ -1,0 +1,405 @@
+// SpeakUp - Complete Database Schema
+// PostgreSQL via Prisma ORM
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── ENUMS ──────────────────────────────────────────────────────────
+
+enum UserRole {
+  LEARNER
+  TEACHER
+  EDITOR
+  ADMIN
+}
+
+enum UserPlan {
+  FREE
+  PRO
+}
+
+enum CEFRLevel {
+  A1
+  A2
+  B1
+  B2
+  C1
+}
+
+enum LessonCategory {
+  GRAMMAR
+  PRONUNCIATION
+  VOCABULARY
+  SPEAKING_SKILLS
+}
+
+enum LessonStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum QuizType {
+  MULTIPLE_CHOICE
+  FILL_BLANK
+  REORDER
+  LISTEN_ANSWER
+  SPEAK_ANSWER
+  DIALOGUE_MATCH
+}
+
+enum AIDifficulty {
+  GUIDED
+  STANDARD
+  CHALLENGE
+}
+
+enum Formality {
+  CASUAL
+  PROFESSIONAL
+  FORMAL
+}
+
+enum SubscriptionPlan {
+  PRO_MONTHLY
+  PRO_ANNUAL
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  TRIALING
+}
+
+// ─── MODELS ─────────────────────────────────────────────────────────
+
+model User {
+  id               String    @id @default(uuid()) @db.Uuid
+  email            String    @unique
+  emailEncrypted   String?   @map("email_encrypted")
+  passwordHash     String?   @map("password_hash")
+  displayName      String?   @map("display_name")
+  avatarUrl        String?   @map("avatar_url")
+  nativeLanguage   String?   @map("native_language") @default("en")
+  currentLevel     CEFRLevel @default(A1) @map("current_level")
+  role             UserRole  @default(LEARNER)
+  plan             UserPlan  @default(FREE)
+  planExpiresAt    DateTime? @map("plan_expires_at")
+  stripeCustomerId String?   @unique @map("stripe_customer_id")
+  xpTotal          Int       @default(0) @map("xp_total")
+  streakDays       Int       @default(0) @map("streak_days")
+  streakLastAt     DateTime? @map("streak_last_at")
+  timezone         String    @default("UTC")
+  locale           String    @default("en")
+  twoFaSecret      String?   @map("two_fa_secret")
+  twoFaEnabled     Boolean   @default(false) @map("two_fa_enabled")
+  isActive         Boolean   @default(true) @map("is_active")
+  lastSeenAt       DateTime? @map("last_seen_at")
+
+  // OAuth fields
+  googleId         String?   @unique @map("google_id")
+  appleId          String?   @unique @map("apple_id")
+  facebookId       String?   @unique @map("facebook_id")
+
+  // Email verification
+  emailVerified    Boolean   @default(false) @map("email_verified")
+  verifyToken      String?   @map("verify_token")
+  verifyTokenExp   DateTime? @map("verify_token_exp")
+
+  // Password reset
+  resetToken       String?   @map("reset_token")
+  resetTokenExp    DateTime? @map("reset_token_exp")
+
+  // Account lockout
+  failedAttempts   Int       @default(0) @map("failed_attempts")
+  lockedUntil      DateTime? @map("locked_until")
+
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  lessonProgress      UserLessonProgress[]
+  quizAttempts         UserQuizAttempt[]
+  aiSessions           AISession[]
+  pronunciationAttempts PronunciationAttempt[]
+  vocabulary           UserVocabulary[]
+  subscriptions        Subscription[]
+  auditLogs            AuditLog[]         @relation("AuditActor")
+  refreshTokens        RefreshToken[]
+  notifications        Notification[]
+  achievements         UserAchievement[]
+
+  @@index([email])
+  @@index([currentLevel])
+  @@index([role])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  token     String   @unique
+  expiresAt DateTime @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model Lesson {
+  id              String         @id @default(uuid()) @db.Uuid
+  title           String
+  slug            String         @unique
+  category        LessonCategory
+  level           CEFRLevel
+  durationSeconds Int            @map("duration_seconds")
+  contentJson     Json           @map("content_json")
+  audioUrl        String?        @map("audio_url")
+  thumbnailUrl    String?        @map("thumbnail_url")
+  isPublished     Boolean        @default(false) @map("is_published")
+  isPremium       Boolean        @default(false) @map("is_premium")
+  xpReward        Int            @default(10) @map("xp_reward")
+  orderIndex      Int            @default(0) @map("order_index")
+  tags            String[]       @default([])
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  // Relations
+  progress       UserLessonProgress[]
+  quizQuestions  QuizQuestion[]
+
+  @@index([level, category, isPublished])
+  @@index([slug])
+  @@map("lessons")
+}
+
+model UserLessonProgress {
+  id              String       @id @default(uuid()) @db.Uuid
+  userId          String       @map("user_id") @db.Uuid
+  lessonId        String       @map("lesson_id") @db.Uuid
+  status          LessonStatus @default(NOT_STARTED)
+  score           Float?
+  completedAt     DateTime?    @map("completed_at")
+  timeSpentSeconds Int         @default(0) @map("time_spent_seconds")
+  attemptCount    Int          @default(0) @map("attempt_count")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, lessonId])
+  @@index([userId, status])
+  @@map("user_lesson_progress")
+}
+
+model QuizQuestion {
+  id              String   @id @default(uuid()) @db.Uuid
+  lessonId        String?  @map("lesson_id") @db.Uuid
+  type            QuizType
+  level           CEFRLevel
+  prompt          String
+  options         Json?
+  correctAnswer   String   @map("correct_answer")
+  explanation     String?
+  audioUrl        String?  @map("audio_url")
+  difficultyRating Float   @default(0.5) @map("difficulty_rating")
+  tags            String[] @default([])
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  lesson   Lesson?           @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  attempts UserQuizAttempt[]
+
+  @@index([level, type])
+  @@index([lessonId])
+  @@map("quiz_questions")
+}
+
+model UserQuizAttempt {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  questionId     String    @map("question_id") @db.Uuid
+  userAnswer     String    @map("user_answer")
+  isCorrect      Boolean   @map("is_correct")
+  timeTakenMs    Int       @map("time_taken_ms")
+  srsNextReview  DateTime? @map("srs_next_review")
+  srsIntervalDays Float    @default(1) @map("srs_interval_days")
+  srsEaseFactor  Float     @default(2.5) @map("srs_ease_factor")
+  attemptedAt    DateTime  @default(now()) @map("attempted_at")
+
+  user     User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  question QuizQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@index([userId, srsNextReview])
+  @@map("user_quiz_attempts")
+}
+
+model AISession {
+  id              String       @id @default(uuid()) @db.Uuid
+  userId          String       @map("user_id") @db.Uuid
+  scenario        String
+  difficulty      AIDifficulty @default(STANDARD)
+  languageLevel   CEFRLevel    @map("language_level")
+  messages        Json         @default("[]")
+  grammarScore    Float?       @map("grammar_score")
+  vocabularyScore Float?       @map("vocabulary_score")
+  fluencyScore    Float?       @map("fluency_score")
+  feedbackJson    Json?        @map("feedback_json")
+  durationSeconds Int?         @map("duration_seconds")
+  endedAt         DateTime?    @map("ended_at")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, endedAt])
+  @@map("ai_sessions")
+}
+
+model PronunciationAttempt {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  targetText    String   @map("target_text")
+  transcript    String?
+  audioS3Key    String?  @map("audio_s3_key")
+  accuracyScore Float?   @map("accuracy_score")
+  fluencyScore  Float?   @map("fluency_score")
+  phonemeErrors Json     @default("[]") @map("phoneme_errors")
+  attemptedAt   DateTime @default(now()) @map("attempted_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("pronunciation_attempts")
+}
+
+model UserVocabulary {
+  id              String    @id @default(uuid()) @db.Uuid
+  userId          String    @map("user_id") @db.Uuid
+  word            String
+  definition      String?
+  exampleSentence String?   @map("example_sentence")
+  sourceSessionId String?   @map("source_session_id") @db.Uuid
+  confidence      Float     @default(0)
+  srsNextReview   DateTime? @map("srs_next_review")
+  reviewCount     Int       @default(0) @map("review_count")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, word])
+  @@index([userId, srsNextReview])
+  @@map("user_vocabulary")
+}
+
+model Phrase {
+  id              String    @id @default(uuid()) @db.Uuid
+  text            String
+  translationJson Json?     @map("translation_json")
+  situation       String
+  formality       Formality @default(CASUAL)
+  level           CEFRLevel @default(A1)
+  audioUrl        String?   @map("audio_url")
+  usageNote       String?   @map("usage_note")
+  isPublished     Boolean   @default(true) @map("is_published")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@index([situation, level])
+  @@index([formality])
+  @@map("phrases")
+}
+
+model Subscription {
+  id                   String             @id @default(uuid()) @db.Uuid
+  userId               String             @map("user_id") @db.Uuid
+  stripeSubscriptionId String             @unique @map("stripe_subscription_id")
+  plan                 SubscriptionPlan
+  status               SubscriptionStatus @default(ACTIVE)
+  currentPeriodStart   DateTime           @map("current_period_start")
+  currentPeriodEnd     DateTime           @map("current_period_end")
+  cancelledAt          DateTime?          @map("cancelled_at")
+  trialEnd             DateTime?          @map("trial_end")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  updatedAt            DateTime           @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@map("subscriptions")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  actorId     String?  @map("actor_id") @db.Uuid
+  action      String
+  targetType  String?  @map("target_type")
+  targetId    String?  @map("target_id")
+  metadata    Json?
+  ipAddress   String?  @map("ip_address")
+  performedAt DateTime @default(now()) @map("performed_at")
+
+  actor User? @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([actorId])
+  @@index([action])
+  @@index([performedAt])
+  @@map("audit_logs")
+}
+
+model Notification {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  type      String
+  title     String
+  body      String
+  data      Json?
+  readAt    DateTime? @map("read_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+model Achievement {
+  id          String @id @default(uuid()) @db.Uuid
+  key         String @unique
+  title       String
+  description String
+  iconUrl     String? @map("icon_url")
+  xpReward    Int     @default(0) @map("xp_reward")
+  criteria    Json
+
+  users UserAchievement[]
+
+  @@map("achievements")
+}
+
+model UserAchievement {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  achievementId String   @map("achievement_id") @db.Uuid
+  unlockedAt    DateTime @default(now()) @map("unlocked_at")
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievement Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, achievementId])
+  @@map("user_achievements")
+}
