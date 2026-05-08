@@ -67,3 +67,23 @@ export async function safeDel(key: string): Promise<void> {
     // silently ignore
   }
 }
+
+/** Safe Redis incr */
+export async function safeIncr(key: string): Promise<number> {
+  if (!redisConnected) return 0;
+  try {
+    return await redis.incr(key);
+  } catch {
+    return 0;
+  }
+}
+
+/** Safe Redis expire */
+export async function safeExpire(key: string, seconds: number): Promise<void> {
+  if (!redisConnected) return;
+  try {
+    await redis.expire(key, seconds);
+  } catch {
+    // silently ignore
+  }
+}

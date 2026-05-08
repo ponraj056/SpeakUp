@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { prisma } from '../../config/database';
-import { redis } from '../../config/redis';
+import { safeGet, safeSet, safeIncr, safeExpire } from '../../config/redis';
 import { config } from '../../config/env';
 import { AppError } from '../../shared/errors';
 import { AIChatInput, GrammarCheckInput } from '../../shared/schemas';
@@ -75,11 +75,8 @@ const AI_CACHE_TTL = 86400; // 24 hours
 export class AIService {
   private client: Anthropic | null = null;
 
-  private getClient(): Anthropic {
-    if (!this.client) {
-      if (!config.ai.anthropicKey) {
-        throw AppError.internal('Anthropic API key not configured');
-      }
+  private getClient(): Anthropic | null {
+    if (!this.client && config.ai.anthropicKey) {
       this.client = new Anthropic({ apiKey: config.ai.anthropicKey });
     }
     return this.client;
@@ -92,11 +89,11 @@ export class AIService {
     // Rate limit free users
     if (userPlan === 'FREE') {
       const todayKey = `ai:limit:${userId}:${new Date().toISOString().split('T')[0]}`;
-      const count = await redis.incr(todayKey);
+      const count = await safeIncr(todayKey);
       if (count === 1) {
-        await redis.expire(todayKey, 86400);
+        await safeExpire(todayKey, 86400);
       }
-      if (count > DAILY_AI_LIMIT_FREE) {
+      if (count > DAILY_AI_LIMIT_FREE && count !== 0) {
         throw AppError.tooMany(
           'Daily AI chat limit reached. Upgrade to Pro for unlimited conversations.'
         );
@@ -163,7 +160,7 @@ IMPORTANT RULES:
 
     // Check cache
     const cacheKey = `ai:cache:${session.scenario}:${session.difficulty}:${input.message.substring(0, 50)}`;
-    const cached = await redis.get(cacheKey);
+    const cached = await safeGet(cacheKey);
 
     let aiResponse: string;
 
@@ -171,26 +168,42 @@ IMPORTANT RULES:
       // Use cached response for first exchanges
       aiResponse = cached;
     } else {
-      // Call Claude API
       const client = this.getClient();
-      const claudeMessages = messages.map((m) => ({
-        role: m.role as 'user' | 'assistant',
-        content: m.content,
-      }));
+      if (client) {
+        // Call Claude API
+        const claudeMessages = messages.map((m) => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+        }));
 
-      const response = await client.messages.create({
-        model: 'claude-opus-4-20250514',
-        max_tokens: 500,
-        system: systemPrompt,
-        messages: claudeMessages,
-      });
+        const response = await client.messages.create({
+          model: 'claude-3-5-sonnet-20240620',
+          max_tokens: 500,
+          system: systemPrompt,
+          messages: claudeMessages,
+        });
 
-      const textBlock = response.content.find((b) => b.type === 'text');
-      aiResponse = textBlock?.text || 'I apologize, I could not generate a response.';
+        const textBlock = response.content.find((b) => b.type === 'text');
+        aiResponse = textBlock?.text || 'I apologize, I could not generate a response.';
 
-      // Cache first responses
-      if (messages.length <= 2) {
-        await redis.setex(cacheKey, AI_CACHE_TTL, aiResponse);
+        // Cache first responses
+        if (messages.length <= 2) {
+          await safeSet(cacheKey, aiResponse, AI_CACHE_TTL);
+        }
+      } else {
+        // MOCK MODE: Generate context-aware mock response
+        const msg = input.message.toLowerCase();
+        const scenario = session.scenario;
+        
+        if (msg.includes('hello') || msg.includes('hi')) {
+          aiResponse = `Hello! I am your ${scenarioConfig.character}. I'm happy to practice English with you in this ${scenarioConfig.title} scenario. How can I help you today?`;
+        } else if (msg.includes('ready') || msg.includes('start')) {
+          aiResponse = `Great! Let's begin our ${scenarioConfig.title} practice. As your ${scenarioConfig.character}, I'll help you improve your ${session.languageLevel} level English. What would you like to discuss first?`;
+        } else if (msg.includes('help')) {
+          aiResponse = `Of course! I can help you practice common phrases used in a ${scenarioConfig.title}. Since we are at a ${session.languageLevel} level, let's keep it simple. Shall we try some basic greetings?`;
+        } else {
+          aiResponse = `That's interesting! As your ${scenarioConfig.character}, I think it's important to discuss that further. Could you tell me more about it using your ${session.languageLevel} level vocabulary? (Mock AI Response)`;
+        }
       }
     }
 
@@ -218,10 +231,11 @@ IMPORTANT RULES:
   async grammarCheck(text: string, userLevel: CEFRLevel) {
     const client = this.getClient();
 
-    const response = await client.messages.create({
-      model: 'claude-opus-4-20250514',
-      max_tokens: 1000,
-      system: `You are an expert English grammar checker for ${userLevel} level learners.
+    if (client) {
+      const response = await client.messages.create({
+        model: 'claude-3-5-sonnet-20240620',
+        max_tokens: 1000,
+        system: `You are an expert English grammar checker for ${userLevel} level learners.
 Analyze the text and return a JSON object with:
 - "correctedText": the corrected version
 - "errors": array of {original, correction, explanation, type} where type is grammar/spelling/punctuation
@@ -229,20 +243,32 @@ Analyze the text and return a JSON object with:
 - "suggestions": array of improvement tips
 
 Return ONLY valid JSON, no markdown.`,
-      messages: [{ role: 'user', content: text }],
-    });
+        messages: [{ role: 'user', content: text }],
+      });
 
-    const textBlock = response.content.find((b) => b.type === 'text');
-    try {
-      return JSON.parse(textBlock?.text || '{}');
-    } catch {
-      return {
-        correctedText: text,
-        errors: [],
-        score: 100,
-        suggestions: [],
-      };
+      const textBlock = response.content.find((b) => b.type === 'text');
+      try {
+        return JSON.parse(textBlock?.text || '{}');
+      } catch {
+        return this.getMockGrammarResult(text);
+      }
+    } else {
+      return this.getMockGrammarResult(text);
     }
+  }
+
+  private getMockGrammarResult(text: string) {
+    return {
+      correctedText: text.charAt(0).toUpperCase() + text.slice(1) + (text.endsWith('.') ? '' : '.'),
+      errors: text.toLowerCase() === text ? [{
+        original: text.split(' ')[0],
+        correction: text.split(' ')[0].charAt(0).toUpperCase() + text.split(' ')[0].slice(1),
+        explanation: "Sentences should start with a capital letter.",
+        type: "punctuation"
+      }] : [],
+      score: text.length > 10 ? 85 : 95,
+      suggestions: ["Try using more descriptive adjectives.", "Check your sentence punctuation."],
+    };
   }
 
   /**
@@ -262,10 +288,13 @@ Return ONLY valid JSON, no markdown.`,
 
     // Use Claude to generate feedback
     const client = this.getClient();
-    const response = await client.messages.create({
-      model: 'claude-opus-4-20250514',
-      max_tokens: 1000,
-      system: `Analyze this English conversation and provide a feedback card. Return JSON only:
+    let feedback;
+
+    if (client) {
+      const response = await client.messages.create({
+        model: 'claude-3-5-sonnet-20240620',
+        max_tokens: 1000,
+        system: `Analyze this English conversation and provide a feedback card. Return JSON only:
 {
   "grammarScore": 0-100,
   "vocabularyScore": 0-100,
@@ -276,27 +305,20 @@ Return ONLY valid JSON, no markdown.`,
   "improvements": ["improvement1"],
   "overallFeedback": "paragraph of feedback"
 }`,
-      messages: [{
-        role: 'user',
-        content: `Conversation (user level: ${session.languageLevel}):\n${messages.map((m) => `${m.role}: ${m.content}`).join('\n')}`,
-      }],
-    });
+        messages: [{
+          role: 'user',
+          content: `Conversation (user level: ${session.languageLevel}):\n${messages.map((m) => `${m.role}: ${m.content}`).join('\n')}`,
+        }],
+      });
 
-    const textBlock = response.content.find((b) => b.type === 'text');
-    let feedback;
-    try {
-      feedback = JSON.parse(textBlock?.text || '{}');
-    } catch {
-      feedback = {
-        grammarScore: 70,
-        vocabularyScore: 70,
-        fluencyScore: 70,
-        topCorrections: [],
-        newWords: [],
-        strengths: [],
-        improvements: [],
-        overallFeedback: 'Good practice session!',
-      };
+      const textBlock = response.content.find((b) => b.type === 'text');
+      try {
+        feedback = JSON.parse(textBlock?.text || '{}');
+      } catch {
+        feedback = this.getMockFeedback(session.languageLevel);
+      }
+    } else {
+      feedback = this.getMockFeedback(session.languageLevel);
     }
 
     // Calculate duration
@@ -379,6 +401,21 @@ Return ONLY valid JSON, no markdown.`,
       },
       feedback: session.feedbackJson,
       messages: session.messages,
+    };
+  }
+
+  private getMockFeedback(level: string) {
+    return {
+      grammarScore: 85,
+      vocabularyScore: 80,
+      fluencyScore: 75,
+      topCorrections: [
+        { original: "i am go", corrected: "I am going", explanation: "Use present continuous for ongoing actions." }
+      ],
+      newWords: ["fluency", "conversation", "practice"],
+      strengths: ["Good participation", "Clear pronunciation"],
+      improvements: ["Work on verb tenses", "Expand vocabulary"],
+      overallFeedback: `Great job practicing at the ${level} level! You communicated your ideas clearly. (Mock Feedback)`,
     };
   }
 }
