@@ -5,7 +5,7 @@ import { CreditCard, Check, Star, Zap, Crown } from "lucide-react";
 
 export default function BillingPage() {
   const user = useAuthStore((s) => s.user);
-  const isPro = user?.plan === "PRO";
+  const isPro = user?.plan === "PAID";
 
   return (
     <div className="space-y-8 max-w-4xl">

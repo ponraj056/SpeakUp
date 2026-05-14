@@ -1,6 +1,3 @@
-// SpeakUp - Complete Database Schema
-// PostgreSQL via Prisma ORM
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,65 +7,12 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ─── ENUMS ──────────────────────────────────────────────────────────
-
-enum UserRole {
-  LEARNER
-  TEACHER
-  EDITOR
-  ADMIN
-}
+// ── ENUMS ──────────────────────────────────────────────────────────────────
 
 enum UserPlan {
   FREE
-  PRO
-}
-
-enum CEFRLevel {
-  A1
-  A2
-  B1
-  B2
-  C1
-}
-
-enum LessonCategory {
-  GRAMMAR
-  PRONUNCIATION
-  VOCABULARY
-  SPEAKING_SKILLS
-}
-
-enum LessonStatus {
-  NOT_STARTED
-  IN_PROGRESS
-  COMPLETED
-}
-
-enum QuizType {
-  MULTIPLE_CHOICE
-  FILL_BLANK
-  REORDER
-  LISTEN_ANSWER
-  SPEAK_ANSWER
-  DIALOGUE_MATCH
-}
-
-enum AIDifficulty {
-  GUIDED
-  STANDARD
-  CHALLENGE
-}
-
-enum Formality {
-  CASUAL
-  PROFESSIONAL
-  FORMAL
-}
-
-enum SubscriptionPlan {
-  PRO_MONTHLY
-  PRO_ANNUAL
+  TRIAL
+  PAID
 }
 
 enum SubscriptionStatus {
@@ -78,328 +22,382 @@ enum SubscriptionStatus {
   TRIALING
 }
 
-// ─── MODELS ─────────────────────────────────────────────────────────
+enum SubscriptionPlan {
+  MONTHLY
+  ANNUAL
+}
+
+enum PracticeMode {
+  HUMAN_AI
+  HUMAN_HUMAN
+  AI_TEACHER
+}
+
+enum Severity {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum LeagueTier {
+  BRONZE
+  SILVER
+  GOLD
+  PLATINUM
+  DIAMOND
+}
+
+enum CallRating {
+  POOR
+  AVERAGE
+  GOOD
+  EXCELLENT
+}
+
+enum ConnectionStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  BLOCKED
+}
+
+enum ProgressCategory {
+  GRAMMAR
+  VOCABULARY
+  PRONUNCIATION
+}
+
+enum ScenarioDifficulty {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+
+// ── MODELS ─────────────────────────────────────────────────────────────────
 
 model User {
-  id               String    @id @default(uuid()) @db.Uuid
-  email            String    @unique
-  emailEncrypted   String?   @map("email_encrypted")
-  passwordHash     String?   @map("password_hash")
-  displayName      String?   @map("display_name")
-  avatarUrl        String?   @map("avatar_url")
-  nativeLanguage   String?   @map("native_language") @default("en")
-  currentLevel     CEFRLevel @default(A1) @map("current_level")
-  role             UserRole  @default(LEARNER)
-  plan             UserPlan  @default(FREE)
-  planExpiresAt    DateTime? @map("plan_expires_at")
-  stripeCustomerId String?   @unique @map("stripe_customer_id")
-  xpTotal          Int       @default(0) @map("xp_total")
-  streakDays       Int       @default(0) @map("streak_days")
-  streakLastAt     DateTime? @map("streak_last_at")
-  timezone         String    @default("UTC")
-  locale           String    @default("en")
-  twoFaSecret      String?   @map("two_fa_secret")
-  twoFaEnabled     Boolean   @default(false) @map("two_fa_enabled")
-  isActive         Boolean   @default(true) @map("is_active")
-  lastSeenAt       DateTime? @map("last_seen_at")
-
-  // OAuth fields
-  googleId         String?   @unique @map("google_id")
-  appleId          String?   @unique @map("apple_id")
-  facebookId       String?   @unique @map("facebook_id")
-
-  // Email verification
-  emailVerified    Boolean   @default(false) @map("email_verified")
-  verifyToken      String?   @map("verify_token")
-  verifyTokenExp   DateTime? @map("verify_token_exp")
-
-  // Password reset
-  resetToken       String?   @map("reset_token")
-  resetTokenExp    DateTime? @map("reset_token_exp")
-
-  // Account lockout
-  failedAttempts   Int       @default(0) @map("failed_attempts")
-  lockedUntil      DateTime? @map("locked_until")
-
-  createdAt        DateTime  @default(now()) @map("created_at")
-  updatedAt        DateTime  @updatedAt @map("updated_at")
+  id                   String            @id @default(uuid()) @db.Uuid
+  displayName          String            @map("display_name") @db.VarChar(100)
+  avatarColor          String?           @default("#6C5CE7") @map("avatar_color") @db.VarChar(7)
+  avatarUrl            String?           @map("avatar_url")
+  email                String            @unique @db.VarChar(255) // Encrypted at application layer
+  emailHash            String            @unique @map("email_hash") // Blind index for lookups
+  passwordHash         String?           @map("password_hash") @db.VarChar(255)
+  
+  googleId             String?           @unique @map("google_id")
+  appleId              String?           @unique @map("apple_id")
+  
+  nativeLanguage       String            @default("ta") @map("native_language") @db.VarChar(10)
+  englishLevel         Int               @default(1) @map("english_level") @db.SmallInt // 1-10
+  profession           String?           @db.VarChar(100)
+  interests            String[]
+  locationCity         String?           @map("location_city") @db.VarChar(100)
+  locationState        String?           @map("location_state") @db.VarChar(100)
+  
+  xpTotal              Int               @default(0) @map("xp_total")
+  streakDays           Int               @default(0) @map("streak_days")
+  streakLastAt         DateTime?         @map("streak_last_at")
+  streakSaversRemaining Int              @default(2) @map("streak_savers_remaining") @db.SmallInt
+  
+  plan                 UserPlan          @default(TRIAL)
+  planExpiresAt        DateTime?         @map("plan_expires_at")
+  
+  razorpayCustomerId   String?           @map("razorpay_customer_id") @db.VarChar(50)
+  stripeCustomerId     String?           @map("stripe_customer_id") @db.VarChar(50)
+  
+  callRating           CallRating        @default(AVERAGE) @map("call_rating")
+  isDiscoverable       Boolean           @default(true) @map("is_discoverable")
+  isBanned             Boolean           @default(false) @map("is_banned")
+  
+  lastSeenAt           DateTime?         @map("last_seen_at")
+  fcmToken             String?           @map("fcm_token")
+  deviceInfo           Json?             @map("device_info")
+  preferences          Json              @default("{}")
+  
+  emailVerified        Boolean           @default(false) @map("email_verified")
+  verificationToken    String?           @map("verification_token")
+  
+  createdAt            DateTime          @default(now()) @map("created_at")
+  updatedAt            DateTime          @updatedAt @map("updated_at")
 
   // Relations
-  lessonProgress      UserLessonProgress[]
-  quizAttempts         UserQuizAttempt[]
-  aiSessions           AISession[]
-  pronunciationAttempts PronunciationAttempt[]
-  vocabulary           UserVocabulary[]
   subscriptions        Subscription[]
-  auditLogs            AuditLog[]         @relation("AuditActor")
-  refreshTokens        RefreshToken[]
-  notifications        Notification[]
-  achievements         UserAchievement[]
+  practiceSessions     PracticeSession[] @relation("UserSessions")
+  partnerSessions      PracticeSession[] @relation("PartnerSessions")
+  corrections          SessionCorrection[]
+  sessionWords         SessionWord[]
+  leagueEntries        LeagueEntry[]
+  achievements         Achievement[]
+  hostedRooms          CommunityRoom[]   @relation("HostRooms")
+  roomParticipations   RoomParticipant[]
+  requestedConnections PartnerConnection[] @relation("Requester")
+  targetConnections    PartnerConnection[] @relation("Target")
+  userProgress         UserProgress[]
+  auditLogs            AuditLog[]
 
   @@index([email])
-  @@index([currentLevel])
-  @@index([role])
-  @@map("users")
-}
-
-model RefreshToken {
-  id        String   @id @default(uuid()) @db.Uuid
-  userId    String   @map("user_id") @db.Uuid
-  token     String   @unique
-  expiresAt DateTime @map("expires_at")
-  revokedAt DateTime? @map("revoked_at")
-  createdAt DateTime @default(now()) @map("created_at")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([token])
-  @@index([userId])
-  @@map("refresh_tokens")
-}
-
-model Lesson {
-  id              String         @id @default(uuid()) @db.Uuid
-  title           String
-  slug            String         @unique
-  category        LessonCategory
-  level           CEFRLevel
-  durationSeconds Int            @map("duration_seconds")
-  contentJson     Json           @map("content_json")
-  audioUrl        String?        @map("audio_url")
-  thumbnailUrl    String?        @map("thumbnail_url")
-  isPublished     Boolean        @default(false) @map("is_published")
-  isPremium       Boolean        @default(false) @map("is_premium")
-  xpReward        Int            @default(10) @map("xp_reward")
-  orderIndex      Int            @default(0) @map("order_index")
-  tags            String[]       @default([])
-  createdAt       DateTime       @default(now()) @map("created_at")
-  updatedAt       DateTime       @updatedAt @map("updated_at")
-
-  // Relations
-  progress       UserLessonProgress[]
-  quizQuestions  QuizQuestion[]
-
-  @@index([level, category, isPublished])
-  @@index([slug])
-  @@map("lessons")
-}
-
-model UserLessonProgress {
-  id              String       @id @default(uuid()) @db.Uuid
-  userId          String       @map("user_id") @db.Uuid
-  lessonId        String       @map("lesson_id") @db.Uuid
-  status          LessonStatus @default(NOT_STARTED)
-  score           Float?
-  completedAt     DateTime?    @map("completed_at")
-  timeSpentSeconds Int         @default(0) @map("time_spent_seconds")
-  attemptCount    Int          @default(0) @map("attempt_count")
-  createdAt       DateTime     @default(now()) @map("created_at")
-  updatedAt       DateTime     @updatedAt @map("updated_at")
-
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, lessonId])
-  @@index([userId, status])
-  @@map("user_lesson_progress")
-}
-
-model QuizQuestion {
-  id              String   @id @default(uuid()) @db.Uuid
-  lessonId        String?  @map("lesson_id") @db.Uuid
-  type            QuizType
-  level           CEFRLevel
-  prompt          String
-  options         Json?
-  correctAnswer   String   @map("correct_answer")
-  explanation     String?
-  audioUrl        String?  @map("audio_url")
-  difficultyRating Float   @default(0.5) @map("difficulty_rating")
-  tags            String[] @default([])
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
-
-  lesson   Lesson?           @relation(fields: [lessonId], references: [id], onDelete: SetNull)
-  attempts UserQuizAttempt[]
-
-  @@index([level, type])
-  @@index([lessonId])
-  @@map("quiz_questions")
-}
-
-model UserQuizAttempt {
-  id             String    @id @default(uuid()) @db.Uuid
-  userId         String    @map("user_id") @db.Uuid
-  questionId     String    @map("question_id") @db.Uuid
-  userAnswer     String    @map("user_answer")
-  isCorrect      Boolean   @map("is_correct")
-  timeTakenMs    Int       @map("time_taken_ms")
-  srsNextReview  DateTime? @map("srs_next_review")
-  srsIntervalDays Float    @default(1) @map("srs_interval_days")
-  srsEaseFactor  Float     @default(2.5) @map("srs_ease_factor")
-  attemptedAt    DateTime  @default(now()) @map("attempted_at")
-
-  user     User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  question QuizQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
-
-  @@index([userId, srsNextReview])
-  @@map("user_quiz_attempts")
-}
-
-model AISession {
-  id              String       @id @default(uuid()) @db.Uuid
-  userId          String       @map("user_id") @db.Uuid
-  scenario        String
-  difficulty      AIDifficulty @default(STANDARD)
-  languageLevel   CEFRLevel    @map("language_level")
-  messages        Json         @default("[]")
-  grammarScore    Float?       @map("grammar_score")
-  vocabularyScore Float?       @map("vocabulary_score")
-  fluencyScore    Float?       @map("fluency_score")
-  feedbackJson    Json?        @map("feedback_json")
-  durationSeconds Int?         @map("duration_seconds")
-  endedAt         DateTime?    @map("ended_at")
-  createdAt       DateTime     @default(now()) @map("created_at")
-  updatedAt       DateTime     @updatedAt @map("updated_at")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId, endedAt])
-  @@map("ai_sessions")
-}
-
-model PronunciationAttempt {
-  id            String   @id @default(uuid()) @db.Uuid
-  userId        String   @map("user_id") @db.Uuid
-  targetText    String   @map("target_text")
-  transcript    String?
-  audioS3Key    String?  @map("audio_s3_key")
-  accuracyScore Float?   @map("accuracy_score")
-  fluencyScore  Float?   @map("fluency_score")
-  phonemeErrors Json     @default("[]") @map("phoneme_errors")
-  attemptedAt   DateTime @default(now()) @map("attempted_at")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@map("pronunciation_attempts")
-}
-
-model UserVocabulary {
-  id              String    @id @default(uuid()) @db.Uuid
-  userId          String    @map("user_id") @db.Uuid
-  word            String
-  definition      String?
-  exampleSentence String?   @map("example_sentence")
-  sourceSessionId String?   @map("source_session_id") @db.Uuid
-  confidence      Float     @default(0)
-  srsNextReview   DateTime? @map("srs_next_review")
-  reviewCount     Int       @default(0) @map("review_count")
-  createdAt       DateTime  @default(now()) @map("created_at")
-  updatedAt       DateTime  @updatedAt @map("updated_at")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, word])
-  @@index([userId, srsNextReview])
-  @@map("user_vocabulary")
-}
-
-model Phrase {
-  id              String    @id @default(uuid()) @db.Uuid
-  text            String
-  translationJson Json?     @map("translation_json")
-  situation       String
-  formality       Formality @default(CASUAL)
-  level           CEFRLevel @default(A1)
-  audioUrl        String?   @map("audio_url")
-  usageNote       String?   @map("usage_note")
-  isPublished     Boolean   @default(true) @map("is_published")
-  createdAt       DateTime  @default(now()) @map("created_at")
-  updatedAt       DateTime  @updatedAt @map("updated_at")
-
-  @@index([situation, level])
-  @@index([formality])
-  @@map("phrases")
+  @@index([plan, planExpiresAt])
+  @@index([isDiscoverable, englishLevel])
 }
 
 model Subscription {
-  id                   String             @id @default(uuid()) @db.Uuid
-  userId               String             @map("user_id") @db.Uuid
-  stripeSubscriptionId String             @unique @map("stripe_subscription_id")
-  plan                 SubscriptionPlan
-  status               SubscriptionStatus @default(ACTIVE)
-  currentPeriodStart   DateTime           @map("current_period_start")
-  currentPeriodEnd     DateTime           @map("current_period_end")
-  cancelledAt          DateTime?          @map("cancelled_at")
-  trialEnd             DateTime?          @map("trial_end")
-  createdAt            DateTime           @default(now()) @map("created_at")
-  updatedAt            DateTime           @updatedAt @map("updated_at")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@index([status])
-  @@map("subscriptions")
+  id                      String             @id @default(uuid()) @db.Uuid
+  userId                  String             @map("user_id") @db.Uuid
+  user                    User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  plan                    SubscriptionPlan
+  amountPaise             Int                @map("amount_paise")
+  currency                String             @default("INR") @db.VarChar(3)
+  
+  razorpaySubscriptionId  String?            @unique @map("razorpay_subscription_id") @db.VarChar(100)
+  stripeSubscriptionId    String?            @unique @map("stripe_subscription_id") @db.VarChar(100)
+  
+  status                  SubscriptionStatus @default(TRIALING)
+  trialEnd                DateTime?          @map("trial_end")
+  currentPeriodStart      DateTime?          @map("current_period_start")
+  currentPeriodEnd        DateTime?          @map("current_period_end")
+  cancelledAt             DateTime?          @map("cancelled_at")
+  
+  createdAt               DateTime           @default(now()) @map("created_at")
+  updatedAt               DateTime           @updatedAt @map("updated_at")
 }
 
-model AuditLog {
-  id          String   @id @default(uuid()) @db.Uuid
-  actorId     String?  @map("actor_id") @db.Uuid
-  action      String
-  targetType  String?  @map("target_type")
-  targetId    String?  @map("target_id")
-  metadata    Json?
-  ipAddress   String?  @map("ip_address")
-  performedAt DateTime @default(now()) @map("performed_at")
+model PracticeSession {
+  id                   String            @id @default(uuid()) @db.Uuid
+  userId               String            @map("user_id") @db.Uuid
+  user                 User              @relation("UserSessions", fields: [userId], references: [id])
+  
+  mode                 PracticeMode
+  partnerId            String?           @map("partner_id") @db.Uuid
+  partner              User?             @relation("PartnerSessions", fields: [partnerId], references: [id])
+  
+  scenarioName         String?           @map("scenario_name") @db.VarChar(100)
+  aiCharacter          String?           @map("ai_character") @db.VarChar(50)
+  language             String            @default("en") @db.VarChar(10)
+  level                Int?              @db.SmallInt
+  
+  messages             Json[]            // [{ role, content, timestamp, corrections: [] }]
+  
+  grammarScore         Decimal?          @map("grammar_score") @db.Decimal(5, 2)
+  pronunciationScore   Decimal?          @map("pronunciation_score") @db.Decimal(5, 2)
+  fluencyScore         Decimal?          @map("fluency_score") @db.Decimal(5, 2)
+  
+  xpEarned             Int               @default(0) @map("xp_earned")
+  trophiesEarned       Int               @default(0) @map("trophies_earned")
+  
+  feedbackJson         Json?             @map("feedback_json")
+  durationSeconds      Int?              @map("duration_seconds")
+  endedAt              DateTime?         @map("ended_at")
+  
+  createdAt            DateTime          @default(now()) @map("created_at")
+  updatedAt            DateTime          @updatedAt @map("updated_at")
 
-  actor User? @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  corrections          SessionCorrection[]
+  sessionWords         SessionWord[]
 
-  @@index([actorId])
-  @@index([action])
-  @@index([performedAt])
-  @@map("audit_logs")
+  @@index([userId, mode, endedAt])
+  @@index([partnerId])
 }
 
-model Notification {
-  id        String   @id @default(uuid()) @db.Uuid
-  userId    String   @map("user_id") @db.Uuid
-  type      String
-  title     String
-  body      String
-  data      Json?
-  readAt    DateTime? @map("read_at")
-  createdAt DateTime  @default(now()) @map("created_at")
+model SessionCorrection {
+  id              String          @id @default(uuid()) @db.Uuid
+  sessionId       String          @map("session_id") @db.Uuid
+  session         PracticeSession @relation(fields: [sessionId], references: [id])
+  userId          String          @map("user_id") @db.Uuid
+  user            User            @relation(fields: [userId], references: [id])
+  
+  originalText    String          @map("original_text") @db.Text
+  correctedText   String          @map("corrected_text") @db.Text
+  errorType       String          @map("error_type") @db.VarChar(100)
+  explanation     String          @db.Text
+  severity        Severity        @default(LOW)
+  wasSaved        Boolean         @default(false) @map("was_saved")
+  
+  createdAt       DateTime        @default(now()) @map("created_at")
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, errorType])
+}
 
-  @@index([userId, readAt])
-  @@map("notifications")
+model SessionWord {
+  id              String          @id @default(uuid()) @db.Uuid
+  sessionId       String          @map("session_id") @db.Uuid
+  session         PracticeSession @relation(fields: [sessionId], references: [id])
+  userId          String          @map("user_id") @db.Uuid
+  user            User            @relation(fields: [userId], references: [id])
+  
+  word            String          @db.VarChar(200)
+  timesUsed       Int             @default(0) @map("times_used") @db.SmallInt
+  goal            Int             @default(3) @db.SmallInt
+  completed       Boolean         @default(false)
+  
+  createdAt       DateTime        @default(now()) @map("created_at")
+}
+
+model WordOfDay {
+  id              String          @id @default(uuid()) @db.Uuid
+  word            String          @db.VarChar(200)
+  definition      String?         @db.Text
+  exampleSentence String?         @map("example_sentence") @db.Text
+  language        String          @default("en") @db.VarChar(10)
+  audioUrl        String?         @map("audio_url") @db.Text
+  dateShown       DateTime        @map("date_shown") @db.Date
+  difficulty      Int?            @db.SmallInt
+  
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  @@unique([dateShown, language])
+}
+
+model LeagueEntry {
+  id              String          @id @default(uuid()) @db.Uuid
+  userId          String          @map("user_id") @db.Uuid
+  user            User            @relation(fields: [userId], references: [id])
+  
+  tier            LeagueTier      @default(BRONZE)
+  trophies        Int             @default(0)
+  weekStart       DateTime        @map("week_start") @db.Date
+  weekEnd         DateTime        @map("week_end") @db.Date
+  rank            Int?
+  promoted        Boolean?
+  demoted         Boolean?
+  
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
+
+  @@unique([userId, weekStart])
+  @@index([userId, weekStart])
+  @@index([tier, trophies])
 }
 
 model Achievement {
-  id          String @id @default(uuid()) @db.Uuid
-  key         String @unique
-  title       String
-  description String
-  iconUrl     String? @map("icon_url")
-  xpReward    Int     @default(0) @map("xp_reward")
-  criteria    Json
-
-  users UserAchievement[]
-
-  @@map("achievements")
+  id              String          @id @default(uuid()) @db.Uuid
+  userId          String          @map("user_id") @db.Uuid
+  user            User            @relation(fields: [userId], references: [id])
+  
+  type            String          @db.VarChar(50)
+  label           String          @db.VarChar(100)
+  icon            String          @db.VarChar(50)
+  xpReward        Int             @default(0) @map("xp_reward")
+  earnedAt        DateTime        @default(now()) @map("earned_at")
+  metadata        Json?
+  
+  createdAt       DateTime        @default(now()) @map("created_at")
 }
 
-model UserAchievement {
-  id            String   @id @default(uuid()) @db.Uuid
-  userId        String   @map("user_id") @db.Uuid
-  achievementId String   @map("achievement_id") @db.Uuid
-  unlockedAt    DateTime @default(now()) @map("unlocked_at")
+model CommunityRoom {
+  id                String            @id @default(uuid()) @db.Uuid
+  name              String            @db.VarChar(100)
+  topic             String?           @db.VarChar(100)
+  language          String?           @db.VarChar(10)
+  levelMin          Int?              @map("level_min") @db.SmallInt
+  levelMax          Int?              @map("level_max") @db.SmallInt
+  isLive            Boolean           @default(false) @map("is_live")
+  isPublic          Boolean           @default(true) @map("is_public")
+  
+  hostId            String            @map("host_id") @db.Uuid
+  host              User              @relation("HostRooms", fields: [hostId], references: [id])
+  
+  maxParticipants   Int               @default(20) @map("max_participants") @db.SmallInt
+  startedAt         DateTime?         @map("started_at")
+  endedAt           DateTime?         @map("ended_at")
+  
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
 
-  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  achievement Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+  participants      RoomParticipant[]
 
-  @@unique([userId, achievementId])
-  @@map("user_achievements")
+  @@index([isLive, language])
+}
+
+model RoomParticipant {
+  id              String          @id @default(uuid()) @db.Uuid
+  roomId          String          @map("room_id") @db.Uuid
+  room            CommunityRoom   @relation(fields: [roomId], references: [id])
+  userId          String          @map("user_id") @db.Uuid
+  user            User            @relation(fields: [userId], references: [id])
+  
+  joinedAt        DateTime        @default(now()) @map("joined_at")
+  leftAt          DateTime?       @map("left_at")
+
+  @@unique([roomId, userId])
+}
+
+model PartnerConnection {
+  id              String            @id @default(uuid()) @db.Uuid
+  requesterId     String            @map("requester_id") @db.Uuid
+  requester       User              @relation("Requester", fields: [requesterId], references: [id])
+  targetId        String            @map("target_id") @db.Uuid
+  target          User              @relation("Target", fields: [targetId], references: [id])
+  
+  status          ConnectionStatus  @default(PENDING)
+  sessionId       String?           @map("session_id") @db.Uuid
+  
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+}
+
+model AICharacter {
+  id               String          @id @default(uuid()) @db.Uuid
+  name             String          @db.VarChar(100)
+  persona          String          @db.Text
+  voiceId          String?         @map("voice_id") @db.VarChar(50) // For AWS Polly
+  avatarImageUrl   String?         @map("avatar_image_url") @db.Text
+  scenarioCategory String?         @map("scenario_category") @db.VarChar(100)
+  difficulty       Int?            @db.SmallInt
+  systemPrompt     String          @map("system_prompt") @db.Text
+  isActive         Boolean         @default(true) @map("is_active")
+  usageCount       Int             @default(0) @map("usage_count")
+  
+  createdAt        DateTime        @default(now()) @map("created_at")
+  updatedAt        DateTime        @updatedAt @map("updated_at")
+
+  scenarios        ScenarioConfig[]
+}
+
+model ScenarioConfig {
+  id              String              @id @default(uuid()) @db.Uuid
+  characterId     String              @map("character_id") @db.Uuid
+  character       AICharacter         @relation(fields: [characterId], references: [id])
+  
+  name            String              @db.VarChar(200)
+  description     String?             @db.Text
+  category        String?             @db.VarChar(100)
+  difficulty      ScenarioDifficulty  @default(INTERMEDIATE)
+  participantCount Int                @default(0) @map("participant_count")
+  thumbnailUrl    String?             @map("thumbnail_url") @db.Text
+  isActive        Boolean             @default(true) @map("is_active")
+  
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+}
+
+model UserProgress {
+  id              String            @id @default(uuid()) @db.Uuid
+  userId          String            @map("user_id") @db.Uuid
+  user            User              @relation(fields: [userId], references: [id])
+  
+  topic           String            @db.VarChar(100)
+  category        ProgressCategory
+  score           Decimal           @db.Decimal(5, 2)
+  sessionsCount   Int               @default(0) @map("sessions_count")
+  lastPracticedAt DateTime?         @map("last_practiced_at")
+  
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+
+  @@unique([userId, topic])
+}
+
+model AuditLog {
+  id              String          @id @default(uuid()) @db.Uuid
+  actorId         String?         @map("actor_id") @db.Uuid
+  actor           User?           @relation(fields: [actorId], references: [id])
+  
+  action          String          @db.VarChar(100)
+  targetType      String          @map("target_type") @db.VarChar(50)
+  targetId        String?         @map("target_id") @db.Uuid
+  metadata        Json?
+  ipAddress       String?         @map("ip_address") @db.VarChar(45)
+  
+  performedAt     DateTime        @default(now()) @map("performed_at")
 }

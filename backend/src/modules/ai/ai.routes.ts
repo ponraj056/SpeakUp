@@ -10,7 +10,7 @@ export async function aiRoutes(fastify: FastifyInstance) {
     return sendSuccess(reply, scenarios);
   });
 
-  /** POST /ai/chat - AI conversation turn */
+  /** POST /ai/chat - AI conversation turn with SSE streaming */
   fastify.post('/chat', {
     preHandler: [fastify.authenticate],
   }, async (request, reply) => {
@@ -21,13 +21,33 @@ export async function aiRoutes(fastify: FastifyInstance) {
       select: { currentLevel: true },
     });
 
-    const result = await aiService.chat(
-      request.userId,
-      body,
-      user?.currentLevel || 'B1',
-      request.userPlan
-    );
-    return sendSuccess(reply, result);
+    // Set SSE headers
+    reply.raw.setHeader('Content-Type', 'text/event-stream');
+    reply.raw.setHeader('Cache-Control', 'no-cache');
+    reply.raw.setHeader('Connection', 'keep-alive');
+
+    try {
+      const result = await aiService.chatStream(
+        request.userId,
+        body,
+        user?.currentLevel || 'B1',
+        request.userPlan,
+        (token) => {
+          reply.raw.write(`data: ${JSON.stringify({ token })}\n\n`);
+        }
+      );
+
+      // Send final metadata
+      reply.raw.write(`data: ${JSON.stringify({ 
+        done: true, 
+        sessionId: result.sessionId, 
+        correction: result.correction 
+      })}\n\n`);
+      reply.raw.end();
+    } catch (error: any) {
+      reply.raw.write(`data: ${JSON.stringify({ error: error.message || 'Internal Server Error' })}\n\n`);
+      reply.raw.end();
+    }
   });
 
   /** POST /ai/grammar - Grammar check text */

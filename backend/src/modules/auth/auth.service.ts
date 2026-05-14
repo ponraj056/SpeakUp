@@ -6,6 +6,7 @@ import { RegisterInput, LoginInput } from '../../shared/schemas';
 import argon2 from 'argon2';
 import { v4 as uuidv4 } from 'uuid';
 import { UserRole, UserPlan } from '@prisma/client';
+import { encrypt, decrypt, hash } from '../../shared/utils/encryption';
 
 /** Argon2id config per OWASP recommendation */
 const ARGON2_OPTIONS: argon2.Options = {
@@ -17,34 +18,42 @@ const ARGON2_OPTIONS: argon2.Options = {
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MINUTES = 30;
-
 export class AuthService {
   /**
-   * Register a new user with email/password.
-   * Sends verification email via token.
+   * Register a new user with Argon2id and PII encryption.
    */
-  async register(input: RegisterInput) {
-    // Check for existing user
-    const existing = await prisma.user.findUnique({
-      where: { email: input.email.toLowerCase() },
+  async register(data: {
+    email: string;
+    password?: string;
+    displayName: string;
+    nativeLanguage?: string;
+    englishLevel?: number;
+  }) {
+    const emailHash = hash(data.email);
+
+    // Check if user exists using blind index
+    const existingUser = await prisma.user.findUnique({
+      where: { emailHash },
     });
 
-    if (existing) {
-      throw AppError.conflict('An account with this email already exists', 'EMAIL_EXISTS');
+    if (existingUser) {
+      throw AppError.badRequest('User with this email already exists');
     }
 
-    // Hash password with Argon2id
-    const passwordHash = await argon2.hash(input.password, ARGON2_OPTIONS);
-
-    // Generate email verification token
-    const verifyToken = uuidv4();
-    const verifyTokenExp = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h
+    // Encrypt email for PII safety
+    const encryptedEmail = encrypt(data.email);
+    
+    let passwordHash: string | undefined;
+    if (data.password) {
+      passwordHash = await argon2.hash(data.password, ARGON_OPTIONS);
+    }
 
     const user = await prisma.user.create({
       data: {
-        email: input.email.toLowerCase(),
+        email: encryptedEmail,
+        emailHash,
         passwordHash,
-        displayName: input.displayName || input.email.split('@')[0],
+        displayName: encryptedDisplayName,
         nativeLanguage: input.nativeLanguage || 'en',
         verifyToken,
         verifyTokenExp,
@@ -64,7 +73,15 @@ export class AuthService {
     // TODO: Send verification email via SendGrid
     // await sendVerificationEmail(user.email, verifyToken);
 
-    return { user, verifyToken };
+    // Decrypt for response
+    return { 
+      user: {
+        ...user,
+        email: input.email.toLowerCase(),
+        displayName: displayName
+      }, 
+      verifyToken 
+    };
   }
 
   /**
@@ -185,8 +202,8 @@ export class AuthService {
       refreshToken,
       user: {
         id: user.id,
-        email: user.email,
-        displayName: user.displayName,
+        email: decrypt(user.email),
+        displayName: user.displayName ? decrypt(user.displayName) : null,
         currentLevel: user.currentLevel,
         role: user.role,
         plan: user.plan,
@@ -205,15 +222,9 @@ export class AuthService {
       include: { user: true },
     });
 
-    if (!storedToken || storedToken.revokedAt || storedToken.expiresAt < new Date()) {
+    if (!storedToken || storedToken.expiresAt < new Date()) {
       throw AppError.unauthorized('Invalid or expired refresh token');
     }
-
-    // Revoke old refresh token (rotation)
-    await prisma.refreshToken.update({
-      where: { id: storedToken.id },
-      data: { revokedAt: new Date() },
-    });
 
     // Issue new tokens
     const accessToken = jwtSign(
@@ -239,9 +250,8 @@ export class AuthService {
   async logout(userId: string, refreshTokenStr?: string) {
     // Revoke all refresh tokens for user
     if (refreshTokenStr) {
-      await prisma.refreshToken.updateMany({
+      await prisma.refreshToken.deleteMany({
         where: { userId, token: refreshTokenStr },
-        data: { revokedAt: new Date() },
       });
     }
 
@@ -283,7 +293,11 @@ export class AuthService {
       throw AppError.notFound('User not found');
     }
 
-    return user;
+    return {
+      ...user,
+      email: decrypt(user.email),
+      displayName: user.displayName ? decrypt(user.displayName) : null,
+    };
   }
 
   /**

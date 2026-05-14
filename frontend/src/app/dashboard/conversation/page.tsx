@@ -28,6 +28,7 @@ import {
   Coffee,
   Map,
 } from "lucide-react";
+import { CorrectionCard } from "@/components/practice/CorrectionCard";
 
 const scenarioIcons: Record<string, typeof Briefcase> = {
   job_interview: Briefcase,
@@ -59,6 +60,7 @@ interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
+  correction?: any;
 }
 
 const difficulties = [
@@ -131,31 +133,49 @@ export default function ConversationPage() {
     if (!inputText.trim() || isLoading) return;
     const userMsg = inputText.trim();
     setInputText("");
-    setMessages((prev) => [...prev, { role: "user", content: userMsg, timestamp: new Date() }]);
+    
+    const newUserMsg: ChatMessage = { role: "user", content: userMsg, timestamp: new Date() };
+    const initialAssistantMsg: ChatMessage = { role: "assistant", content: "", timestamp: new Date() };
+    
+    setMessages((prev) => [...prev, newUserMsg, initialAssistantMsg]);
     setIsLoading(true);
 
+    let assistantMsgContent = "";
+    const assistantMsgIndex = messages.length + 1; // Correct index after adding userMsg and initialAssistantMsg
+
     try {
-      const { data } = await api.aiChat({
-        sessionId: sessionId || undefined,
-        scenario: selectedScenario || undefined,
-        difficulty: selectedDifficulty,
-        message: userMsg,
-      });
-      if (!sessionId) setSessionId(data.sessionId);
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: data.message, timestamp: new Date() },
-      ]);
-    } catch {
-      setMessages((prev) => [
-        ...prev,
+      await api.aiChatStream(
         {
-          role: "assistant",
-          content: "I'm having trouble connecting right now. Please try again.",
-          timestamp: new Date(),
+          sessionId: sessionId || undefined,
+          scenario: selectedScenario || undefined,
+          difficulty: selectedDifficulty,
+          message: userMsg,
         },
-      ]);
-    } finally {
+        (token) => {
+          assistantMsgContent += token;
+          setMessages((prev) => {
+            const next = [...prev];
+            next[assistantMsgIndex] = { ...next[assistantMsgIndex], content: assistantMsgContent };
+            return next;
+          });
+        },
+        (result) => {
+          if (!sessionId) setSessionId(result.sessionId);
+          // Attach correction to the USER message we just sent
+          setMessages((prev) => {
+            const next = [...prev];
+            const userIdx = assistantMsgIndex - 1;
+            next[userIdx] = { ...next[userIdx], correction: result.correction };
+            return next;
+          });
+          setIsLoading(false);
+        },
+        (error) => {
+          console.error("Stream error:", error);
+          setIsLoading(false);
+        }
+      );
+    } catch {
       setIsLoading(false);
     }
   };
@@ -401,51 +421,62 @@ export default function ConversationPage() {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto py-4 space-y-4">
+      <div className="flex-1 overflow-y-auto py-4 space-y-6">
         <AnimatePresence>
           {messages.map((msg, i) => (
             <motion.div
               key={i}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              className={`flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : ""}`}
+              className={`space-y-4`}
             >
-              <div
-                className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-                  msg.role === "user"
-                    ? "bg-cyan-500/10"
-                    : "bg-gradient-to-br from-violet-500 to-indigo-600"
-                }`}
-              >
-                {msg.role === "user" ? (
-                  <User className="w-4 h-4 text-cyan-400" />
-                ) : (
-                  <Bot className="w-4 h-4 text-white" />
-                )}
-              </div>
-              <div
-                className={`max-w-[75%] group relative ${
-                  msg.role === "user" ? "text-right" : ""
-                }`}
-              >
+              <div className={`flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : ""}`}>
                 <div
-                  className={`inline-block px-4 py-3 rounded-2xl text-sm leading-relaxed ${
+                  className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${
                     msg.role === "user"
-                      ? "bg-gradient-to-r from-violet-500 to-indigo-600 text-white rounded-br-md"
-                      : "bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-bl-md"
+                      ? "bg-slate-100"
+                      : "bg-primary shadow-lg shadow-primary/20"
                   }`}
                 >
-                  {msg.content}
+                  {msg.role === "user" ? (
+                    <User className="w-5 h-5 text-slate-500" />
+                  ) : (
+                    <Bot className="w-5 h-5 text-white" />
+                  )}
                 </div>
-                {msg.role === "assistant" && (
-                  <button
-                    onClick={() => speakText(msg.content)}
-                    className="absolute -right-8 top-2 opacity-0 group-hover:opacity-100 transition-opacity text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+                <div
+                  className={`max-w-[75%] group relative ${
+                    msg.role === "user" ? "text-right" : ""
+                  }`}
+                >
+                  <div
+                    className={`inline-block px-5 py-4 rounded-[1.5rem] text-sm leading-relaxed shadow-sm ${
+                      msg.role === "user"
+                        ? "bg-primary text-white rounded-tr-none"
+                        : "bg-white border border-slate-100 text-slate-800 rounded-tl-none"
+                    }`}
                   >
-                    <Volume2 className="w-4 h-4" />
-                  </button>
-                )}
+                    {msg.content || (msg.role === "assistant" && "...")}
+                  </div>
+                  {msg.role === "assistant" && msg.content && (
+                    <button
+                      onClick={() => speakText(msg.content)}
+                      className="absolute -right-10 top-4 opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-primary"
+                    >
+                      <Volume2 className="w-5 h-5" />
+                    </button>
+                  )}
+                </div>
               </div>
+
+              {/* Correction Card for User Messages */}
+              {msg.role === "user" && msg.correction && (
+                <CorrectionCard 
+                  correction={msg.correction} 
+                  onSave={() => console.log("Saved")}
+                  onRepeat={() => console.log("Repeating")}
+                />
+              )}
             </motion.div>
           ))}
         </AnimatePresence>

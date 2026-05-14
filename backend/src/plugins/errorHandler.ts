@@ -1,46 +1,56 @@
-import { FastifyInstance } from 'fastify';
+import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import fp from 'fastify-plugin';
-import { AppError } from '../shared/errors';
-import { sendError } from '../shared/response';
-import { ZodError } from 'zod';
-import { config } from '../config/env';
+import { AppError } from '../shared/utils/errors';
 
-/**
- * Global error handler plugin.
- * Catches all errors and returns a consistent JSON envelope.
- */
-async function errorHandlerPlugin(fastify: FastifyInstance) {
+export default fp(async (fastify: FastifyInstance, opts: FastifyPluginOptions) => {
   fastify.setErrorHandler((error, request, reply) => {
-    // Log error in development
-    if (config.server.isDev) {
-      request.log.error(error);
-    }
+    // Log error
+    request.log.error(error);
 
-    // AppError - known operational errors
+    // If it's a known AppError
     if (error instanceof AppError) {
-      return sendError(reply, error.statusCode, error.message, error.code);
+      return reply.status(error.statusCode).send({
+        data: null,
+        error: {
+          code: error.errorCode,
+          message: error.message,
+          details: error.details,
+        },
+      });
     }
 
-    // Zod validation errors
-    if (error instanceof ZodError) {
-      const messages = error.errors.map((e) => `${e.path.join('.')}: ${e.message}`);
-      return sendError(reply, 400, messages.join('; '), 'VALIDATION_ERROR');
-    }
-
-    // Fastify validation errors
+    // Handle Zod Validation Errors (from fastify-type-provider-zod or manual)
     if (error.validation) {
-      return sendError(reply, 400, error.message, 'VALIDATION_ERROR');
+      return reply.status(400).send({
+        data: null,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Invalid request data',
+          details: error.validation,
+        },
+      });
     }
 
-    // Rate limit errors
-    if (error.statusCode === 429) {
-      return sendError(reply, 429, 'Too many requests. Please slow down.', 'RATE_LIMITED');
-    }
-
-    // Unknown errors - don't leak internals
-    console.error('Unhandled error:', error);
-    return sendError(reply, 500, 'Internal server error', 'INTERNAL_ERROR');
+    // Default 500
+    const isProd = process.env.NODE_ENV === 'production';
+    return reply.status(500).send({
+      data: null,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: isProd ? 'Internal server error' : error.message,
+        stack: isProd ? undefined : error.stack,
+      },
+    });
   });
-}
 
-export default fp(errorHandlerPlugin, { name: 'errorHandler' });
+  // Handle 404
+  fastify.setNotFoundHandler((request, reply) => {
+    reply.status(404).send({
+      data: null,
+      error: {
+        code: 'NOT_FOUND',
+        message: `Route ${request.method} ${request.url} not found`,
+      },
+    });
+  });
+});

@@ -59,20 +59,16 @@ class ApiClient {
   }
 
   // Auth
-  async register(email: string, password: string, displayName?: string) {
-    return this.request<{ user: unknown; verifyToken: string }>('POST', '/auth/register', {
-      email,
-      password,
-      displayName,
-    });
+  async register(data: { email: string; password?: string; displayName: string; nativeLanguage?: string }) {
+    return this.request<{ user: UserProfile; tokens: { accessToken: string; refreshToken: string } }>('POST', '/auth/register', data);
   }
 
-  async login(email: string, password: string, twoFaCode?: string) {
+  async login(email: string, password?: string) {
     return this.request<{
       accessToken: string;
       refreshToken: string;
       user: UserProfile;
-    }>('POST', '/auth/login', { email, password, twoFaCode });
+    }>('POST', '/auth/login', { email, password });
   }
 
   async refreshToken(refreshToken: string) {
@@ -102,7 +98,7 @@ class ApiClient {
   }
 
   async getLesson(slug: string) {
-    return this.request<{ lesson: Lesson; progress: LessonProgress | null }>(
+    return this.request<{ lesson: Lesson; progress: any }>(
       'GET',
       `/lessons/${slug}`
     );
@@ -110,10 +106,6 @@ class ApiClient {
 
   async completeLesson(id: string, data: { score?: number; timeSpentSeconds: number }) {
     return this.request('POST', `/lessons/${id}/complete`, data);
-  }
-
-  async getProgress() {
-    return this.request<ProgressData>('GET', '/lessons/progress');
   }
 
   // AI
@@ -130,6 +122,66 @@ class ApiClient {
     return this.request<AIChatResponse>('POST', '/ai/chat', data);
   }
 
+  async aiChatStream(
+    data: {
+      sessionId?: string;
+      scenario?: string;
+      difficulty?: string;
+      message: string;
+    },
+    onToken: (token: string) => void,
+    onDone: (result: { sessionId: string; correction?: any }) => void,
+    onError: (error: string) => void
+  ) {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    if (this.accessToken) {
+      headers['Authorization'] = `Bearer ${this.accessToken}`;
+    }
+
+    try {
+      const response = await fetch(`${this.baseUrl}/ai/chat`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ ...data, stream: true }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Streaming request failed');
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('No body in response');
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.trim().startsWith('data: ')) {
+            const jsonText = line.trim().substring(6);
+            if (jsonText === '[DONE]') break;
+            const json = JSON.parse(jsonText);
+            if (json.token) onToken(json.token);
+            if (json.done) onDone(json);
+            if (json.error) onError(json.error);
+          }
+        }
+      }
+    } catch (err: any) {
+      onError(err.message);
+    }
+  }
+
   async endAISession(sessionId: string) {
     return this.request('POST', `/ai/sessions/${sessionId}/end`);
   }
@@ -142,48 +194,12 @@ class ApiClient {
     return this.request('POST', '/ai/grammar', { text });
   }
 
-  // Quiz
-  async getDueQuiz(limit?: number) {
-    const query = limit ? `?limit=${limit}` : '';
-    return this.request<QuizDueResponse>('GET', `/quiz/due${query}`);
-  }
-
-  async submitAnswer(data: { questionId: string; userAnswer: string; timeTakenMs: number }) {
-    return this.request<QuizAnswerResult>('POST', '/quiz/answer', data);
-  }
-
-  // Vocabulary
-  async getVocabulary(page = 1, limit = 20) {
-    return this.request<VocabWord[]>('GET', `/vocabulary?page=${page}&limit=${limit}`);
-  }
-
-  async addWord(data: { word: string; definition?: string; exampleSentence?: string }) {
-    return this.request<VocabWord>('POST', '/vocabulary', data);
-  }
-
-  async getDueReviews() {
-    return this.request<VocabWord[]>('GET', '/vocabulary/review');
-  }
-
-  async reviewWord(id: string, remembered: boolean) {
-    return this.request('POST', `/vocabulary/${id}/review`, { remembered });
-  }
-
-  // Phrases
-  async getPhrases(params?: Record<string, string>) {
-    const query = params ? '?' + new URLSearchParams(params).toString() : '';
-    return this.request<Phrase[]>('GET', `/phrases${query}`);
-  }
-
-  async getPhraseOfDay() {
-    return this.request<Phrase>('GET', '/phrases/today');
-  }
-
   // Billing
-  async subscribe(plan: 'PRO_MONTHLY' | 'PRO_ANNUAL') {
-    return this.request<{ sessionId: string; url: string }>('POST', '/billing/subscribe', {
-      plan,
-    });
+  async createSubscription(plan: 'monthly' | 'annual') {
+    return this.request<{ subscription_id: string; payment_link: string }>(
+      'POST', 
+      plan === 'monthly' ? '/billing/subscribe' : '/billing/subscribe-annual'
+    );
   }
 
   async cancelSubscription() {
@@ -192,17 +208,6 @@ class ApiClient {
 
   async getSubscriptionStatus() {
     return this.request('GET', '/billing/status');
-  }
-
-  // Admin
-  async getAdminMetrics() {
-    return this.request('GET', '/admin/metrics');
-  }
-
-  async getAdminUsers(page = 1, limit = 20, search?: string) {
-    const params = new URLSearchParams({ page: String(page), limit: String(limit) });
-    if (search) params.set('search', search);
-    return this.request('GET', `/admin/users?${params}`);
   }
 }
 
@@ -223,20 +228,18 @@ export interface UserProfile {
   email: string;
   displayName: string | null;
   avatarUrl: string | null;
+  avatarColor: string | null;
   nativeLanguage: string;
-  currentLevel: string;
-  role: string;
-  plan: string;
+  englishLevel: number;
+  plan: 'FREE' | 'TRIAL' | 'PAID';
   planExpiresAt: string | null;
   xpTotal: number;
   streakDays: number;
-  streakLastAt: string | null;
   timezone: string;
   locale: string;
   twoFaEnabled: boolean;
   emailVerified: boolean;
   createdAt: string;
-  lastSeenAt: string | null;
 }
 
 export interface Lesson {
@@ -253,28 +256,6 @@ export interface Lesson {
   tags: string[];
 }
 
-export interface LessonProgress {
-  id: string;
-  status: string;
-  score: number | null;
-  completedAt: string | null;
-  timeSpentSeconds: number;
-  attemptCount: number;
-}
-
-export interface ProgressData {
-  user: {
-    xpTotal: number;
-    streakDays: number;
-    streakLastAt: string | null;
-    currentLevel: string;
-  };
-  completedCount: number;
-  totalLessons: number;
-  completionRate: number;
-  recentProgress: Array<LessonProgress & { lesson: Lesson }>;
-}
-
 export interface Scenario {
   id: string;
   title: string;
@@ -283,64 +264,15 @@ export interface Scenario {
 
 export interface AIChatResponse {
   sessionId: string;
-  scenario: string;
-  difficulty: string;
   message: string;
-  messageCount: number;
+  correction?: any;
 }
 
 export interface SessionFeedback {
-  session: Record<string, unknown>;
   scores: { grammar: number; vocabulary: number; fluency: number };
-  feedback: Record<string, unknown>;
-  messages: Array<{ role: string; content: string }>;
-}
-
-export interface QuizDueResponse {
-  dueForReview: QuizQuestion[];
-  newQuestions: QuizQuestion[];
-  totalDue: number;
-}
-
-export interface QuizQuestion {
-  id: string;
-  type: string;
-  level: string;
-  prompt: string;
-  options: unknown;
-  audioUrl: string | null;
-  difficultyRating: number;
-}
-
-export interface QuizAnswerResult {
-  isCorrect: boolean;
-  correctAnswer: string;
-  explanation: string | null;
-  xpEarned: number;
-  nextReview: string;
-  srsInterval: number;
-}
-
-export interface VocabWord {
-  id: string;
-  word: string;
-  definition: string | null;
-  exampleSentence: string | null;
-  confidence: number;
-  srsNextReview: string | null;
-  reviewCount: number;
-  createdAt: string;
-}
-
-export interface Phrase {
-  id: string;
-  text: string;
-  translationJson: Record<string, string> | null;
-  situation: string;
-  formality: string;
-  level: string;
-  audioUrl: string | null;
-  usageNote: string | null;
+  summary: string;
+  mistakes: string[];
+  recommendations: string[];
 }
 
 export const api = new ApiClient(API_BASE_URL);

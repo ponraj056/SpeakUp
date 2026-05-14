@@ -1,223 +1,131 @@
+import Razorpay from 'razorpay';
 import Stripe from 'stripe';
 import { prisma } from '../../config/database';
 import { config } from '../../config/env';
-import { AppError } from '../../shared/errors';
-import { SubscribeInput } from '../../shared/schemas';
+import { AppError } from '../../shared/utils/errors';
+import crypto from 'crypto';
+
+const razorpay = new Razorpay({
+  key_id: config.razorpay.keyId || 'rzp_test_dummy',
+  key_secret: config.razorpay.keySecret || 'dummy_secret',
+});
+
+const stripe = new Stripe(config.stripe.secretKey || 'sk_test_dummy', {
+  apiVersion: '2024-12-18.acacia' as any,
+});
 
 export class BillingService {
-  private stripe: Stripe | null = null;
-
-  private getStripe(): Stripe {
-    if (!this.stripe) {
-      if (!config.stripe.secretKey) {
-        throw AppError.internal('Stripe not configured');
-      }
-      this.stripe = new Stripe(config.stripe.secretKey, {
-        apiVersion: '2024-12-18.acacia',
-      });
-    }
-    return this.stripe;
-  }
-
   /**
-   * Create a Stripe checkout session for Pro subscription.
+   * Create a Razorpay subscription (monthly: 19900, annual: 99900).
    */
-  async createCheckoutSession(userId: string, input: SubscribeInput) {
-    const stripe = this.getStripe();
-
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { email: true, stripeCustomerId: true },
-    });
-
+  async createSubscription(userId: string, plan: 'MONTHLY' | 'ANNUAL') {
+    const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw AppError.notFound('User not found');
 
-    // Create or reuse Stripe customer
-    let customerId = user.stripeCustomerId;
-    if (!customerId) {
-      const customer = await stripe.customers.create({
-        email: user.email,
-        metadata: { userId },
-      });
-      customerId = customer.id;
-      await prisma.user.update({
-        where: { id: userId },
-        data: { stripeCustomerId: customerId },
-      });
-    }
+    const amount = plan === 'MONTHLY' ? 19900 : 99900;
+    const planId = plan === 'MONTHLY' ? config.razorpay.monthlyPlanId : config.razorpay.annualPlanId;
 
-    const priceId = input.plan === 'PRO_MONTHLY'
-      ? config.stripe.proMonthlyPriceId
-      : config.stripe.proAnnualPriceId;
+    if (!planId) throw AppError.internal('Razorpay Plan IDs not configured');
 
-    if (!priceId) {
-      throw AppError.internal('Stripe price ID not configured');
-    }
-
-    const session = await stripe.checkout.sessions.create({
-      customer: customerId,
-      mode: 'subscription',
-      payment_method_types: ['card'],
-      line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `${config.server.frontendUrl}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${config.server.frontendUrl}/billing/cancel`,
-      metadata: { userId, plan: input.plan },
-    });
-
-    return { sessionId: session.id, url: session.url };
-  }
-
-  /**
-   * Cancel subscription.
-   */
-  async cancelSubscription(userId: string) {
-    const stripe = this.getStripe();
-
-    const subscription = await prisma.subscription.findFirst({
-      where: { userId, status: 'ACTIVE' },
-    });
-
-    if (!subscription) {
-      throw AppError.notFound('No active subscription found');
-    }
-
-    await stripe.subscriptions.update(subscription.stripeSubscriptionId, {
-      cancel_at_period_end: true,
-    });
-
-    await prisma.subscription.update({
-      where: { id: subscription.id },
-      data: { cancelledAt: new Date() },
-    });
-
-    return { message: 'Subscription will be cancelled at end of billing period' };
-  }
-
-  /**
-   * Handle Stripe webhook events.
-   */
-  async handleWebhook(event: Stripe.Event) {
-    switch (event.type) {
-      case 'checkout.session.completed': {
-        const session = event.data.object as Stripe.Checkout.Session;
-        const userId = session.metadata?.userId;
-        if (!userId) break;
-
-        const subscriptionId = session.subscription as string;
-        const stripeSubscription = await this.getStripe().subscriptions.retrieve(subscriptionId);
-
-        await prisma.subscription.create({
-          data: {
-            userId,
-            stripeSubscriptionId: subscriptionId,
-            plan: session.metadata?.plan === 'PRO_ANNUAL' ? 'PRO_ANNUAL' : 'PRO_MONTHLY',
-            status: 'ACTIVE',
-            currentPeriodStart: new Date(stripeSubscription.current_period_start * 1000),
-            currentPeriodEnd: new Date(stripeSubscription.current_period_end * 1000),
-          },
-        });
-
-        // Upgrade user to Pro
-        await prisma.user.update({
-          where: { id: userId },
-          data: {
-            plan: 'PRO',
-            planExpiresAt: new Date(stripeSubscription.current_period_end * 1000),
-          },
-        });
-        break;
-      }
-
-      case 'invoice.payment_succeeded': {
-        const invoice = event.data.object as Stripe.Invoice;
-        const subscriptionId = invoice.subscription as string;
-
-        const subscription = await prisma.subscription.findUnique({
-          where: { stripeSubscriptionId: subscriptionId },
-        });
-
-        if (subscription) {
-          const stripeSubscription = await this.getStripe().subscriptions.retrieve(subscriptionId);
-          await prisma.subscription.update({
-            where: { id: subscription.id },
-            data: {
-              status: 'ACTIVE',
-              currentPeriodStart: new Date(stripeSubscription.current_period_start * 1000),
-              currentPeriodEnd: new Date(stripeSubscription.current_period_end * 1000),
-            },
-          });
-
-          await prisma.user.update({
-            where: { id: subscription.userId },
-            data: {
-              plan: 'PRO',
-              planExpiresAt: new Date(stripeSubscription.current_period_end * 1000),
-            },
-          });
-        }
-        break;
-      }
-
-      case 'customer.subscription.deleted': {
-        const sub = event.data.object as Stripe.Subscription;
-        const subscription = await prisma.subscription.findUnique({
-          where: { stripeSubscriptionId: sub.id },
-        });
-
-        if (subscription) {
-          await prisma.subscription.update({
-            where: { id: subscription.id },
-            data: { status: 'CANCELLED', cancelledAt: new Date() },
-          });
-
-          await prisma.user.update({
-            where: { id: subscription.userId },
-            data: { plan: 'FREE', planExpiresAt: null },
-          });
-        }
-        break;
-      }
-
-      case 'invoice.payment_failed': {
-        const invoice = event.data.object as Stripe.Invoice;
-        const subscriptionId = invoice.subscription as string;
-
-        await prisma.subscription.updateMany({
-          where: { stripeSubscriptionId: subscriptionId },
-          data: { status: 'PAST_DUE' },
-        });
-        break;
-      }
-    }
-  }
-
-  /**
-   * Get subscription status.
-   */
-  async getSubscriptionStatus(userId: string) {
-    const subscription = await prisma.subscription.findFirst({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { plan: true, planExpiresAt: true },
+    const subscription = await razorpay.subscriptions.create({
+      plan_id: planId,
+      total_count: plan === 'MONTHLY' ? 12 : 5, // Just for the contract
+      quantity: 1,
+      customer_notify: 1,
     });
 
     return {
-      plan: user?.plan || 'FREE',
-      subscription: subscription
-        ? {
-            id: subscription.id,
-            plan: subscription.plan,
-            status: subscription.status,
-            currentPeriodEnd: subscription.currentPeriodEnd,
-            cancelledAt: subscription.cancelledAt,
-          }
-        : null,
+      subscription_id: subscription.id,
+      payment_link: subscription.short_url,
     };
   }
-}
 
-export const billingService = new BillingService();
+  /**
+   * Handle Razorpay Webhook.
+   */
+  async handleRazorpayWebhook(signature: string, payload: any) {
+    // Verify signature
+    const secret = config.RAZORPAY_WEBHOOK_SECRET!;
+    const expectedSignature = crypto
+      .createHmac('sha256', secret)
+      .update(JSON.stringify(payload))
+      .digest('hex');
+
+    if (signature !== expectedSignature) {
+      throw AppError.forbidden('Invalid webhook signature');
+    }
+
+    const event = payload.event;
+    const data = payload.payload.subscription?.entity || payload.payload.payment?.entity;
+
+    switch (event) {
+      case 'subscription.activated':
+      case 'subscription.charged':
+        await this.activateSubscription(data.id, data.customer_id);
+        break;
+      case 'subscription.halted':
+        await this.handleFailedPayment(data.id);
+        break;
+      case 'subscription.cancelled':
+        await this.deactivateSubscription(data.id);
+        break;
+    }
+  }
+
+  private async activateSubscription(razorpaySubId: string, customerId: string) {
+    const sub = await prisma.subscription.findUnique({
+      where: { razorpaySubscriptionId: razorpaySubId },
+    });
+
+    if (!sub) return;
+
+    await prisma.$transaction([
+      prisma.subscription.update({
+        where: { id: sub.id },
+        data: {
+          status: 'ACTIVE',
+          currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // Approximate
+        },
+      }),
+      prisma.user.update({
+        where: { id: sub.userId },
+        data: {
+          plan: 'PAID',
+          planExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+          razorpayCustomerId: customerId,
+        },
+      }),
+    ]);
+  }
+
+  private async handleFailedPayment(razorpaySubId: string) {
+    const sub = await prisma.subscription.findUnique({
+      where: { razorpaySubscriptionId: razorpaySubId },
+    });
+    if (!sub) return;
+
+    await prisma.subscription.update({
+      where: { id: sub.id },
+      data: { status: 'PAST_DUE' },
+    });
+    // Trigger dunning email via BullMQ (to be implemented)
+  }
+
+  private async deactivateSubscription(razorpaySubId: string) {
+    const sub = await prisma.subscription.findUnique({
+      where: { razorpaySubscriptionId: razorpaySubId },
+    });
+    if (!sub) return;
+
+    await prisma.$transaction([
+      prisma.subscription.update({
+        where: { id: sub.id },
+        data: { status: 'CANCELLED' },
+      }),
+      prisma.user.update({
+        where: { id: sub.userId },
+        data: { plan: 'FREE' },
+      }),
+    ]);
+  }
+}

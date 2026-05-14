@@ -33,6 +33,13 @@ const envSchema = z.object({
   ANTHROPIC_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
 
+  // Razorpay
+  RAZORPAY_KEY_ID: z.string().optional(),
+  RAZORPAY_KEY_SECRET: z.string().optional(),
+  RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
+  RAZORPAY_MONTHLY_PLAN_ID: z.string().optional(),
+  RAZORPAY_ANNUAL_PLAN_ID: z.string().optional(),
+
   // Stripe
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
@@ -99,6 +106,13 @@ export const config = {
   ai: {
     anthropicKey: env.ANTHROPIC_API_KEY,
     openaiKey: env.OPENAI_API_KEY,
+  },
+  razorpay: {
+    keyId: env.RAZORPAY_KEY_ID,
+    keySecret: env.RAZORPAY_KEY_SECRET,
+    webhookSecret: env.RAZORPAY_WEBHOOK_SECRET,
+    monthlyPlanId: env.RAZORPAY_MONTHLY_PLAN_ID,
+    annualPlanId: env.RAZORPAY_ANNUAL_PLAN_ID,
   },
   stripe: {
     secretKey: env.STRIPE_SECRET_KEY,

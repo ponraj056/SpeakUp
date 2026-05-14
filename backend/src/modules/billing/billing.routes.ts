@@ -6,13 +6,36 @@ import Stripe from 'stripe';
 import { config } from '../../config/env';
 
 export async function billingRoutes(fastify: FastifyInstance) {
-  /** POST /billing/subscribe - Start checkout */
+  /** POST /billing/subscribe - Create Razorpay order */
   fastify.post('/subscribe', {
+    preHandler: [fastify.authenticate],
+  }, async (request, reply) => {
+    const order = await billingService.createRazorpayOrder(request.userId);
+    return sendSuccess(reply, order);
+  });
+
+  /** POST /billing/subscribe-intl - Start Stripe checkout */
+  fastify.post('/subscribe-intl', {
     preHandler: [fastify.authenticate],
   }, async (request, reply) => {
     const body = subscribeSchema.parse(request.body);
     const result = await billingService.createCheckoutSession(request.userId, body);
     return sendSuccess(reply, result);
+  });
+
+  /** POST /billing/sync-offline - Get manifest for PWA */
+  fastify.post('/sync-offline', {
+    preHandler: [fastify.authenticate],
+  }, async (request, reply) => {
+    const manifest = await billingService.getOfflineManifest(request.userId);
+    return sendSuccess(reply, manifest);
+  });
+
+  /** POST /webhooks/razorpay - Handle payment success */
+  fastify.post('/webhooks/razorpay', async (request, reply) => {
+    const signature = request.headers['x-razorpay-signature'] as string;
+    await billingService.verifyRazorpayPayment(request.body, signature);
+    return reply.status(200).send({ status: 'ok' });
   });
 
   /** DELETE /billing/cancel - Cancel subscription */
