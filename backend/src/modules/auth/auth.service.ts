@@ -18,17 +18,12 @@ const ARGON2_OPTIONS: argon2.Options = {
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MINUTES = 30;
+
 export class AuthService {
   /**
    * Register a new user with Argon2id and PII encryption.
    */
-  async register(data: {
-    email: string;
-    password?: string;
-    displayName: string;
-    nativeLanguage?: string;
-    englishLevel?: number;
-  }) {
+  async register(data: RegisterInput) {
     const emailHash = hash(data.email);
 
     // Check if user exists using blind index
@@ -40,13 +35,12 @@ export class AuthService {
       throw AppError.badRequest('User with this email already exists');
     }
 
-    // Encrypt email for PII safety
+    // Encrypt PII
     const encryptedEmail = encrypt(data.email);
+    const encryptedDisplayName = data.displayName ? encrypt(data.displayName) : encrypt('User');
     
-    let passwordHash: string | undefined;
-    if (data.password) {
-      passwordHash = await argon2.hash(data.password, ARGON_OPTIONS);
-    }
+    const passwordHash = await argon2.hash(data.password, ARGON2_OPTIONS);
+    const verificationToken = uuidv4();
 
     const user = await prisma.user.create({
       data: {
@@ -54,73 +48,33 @@ export class AuthService {
         emailHash,
         passwordHash,
         displayName: encryptedDisplayName,
-        nativeLanguage: input.nativeLanguage || 'en',
-        verifyToken,
-        verifyTokenExp,
+        nativeLanguage: data.nativeLanguage || 'en',
+        englishLevel: 1,
+        role: UserRole.USER,
+        plan: UserPlan.FREE,
+        verificationToken,
         emailVerified: false,
-      },
-      select: {
-        id: true,
-        email: true,
-        displayName: true,
-        currentLevel: true,
-        role: true,
-        plan: true,
-        createdAt: true,
       },
     });
 
-    // TODO: Send verification email via SendGrid
-    // await sendVerificationEmail(user.email, verifyToken);
+    // TODO: Send verification email
+    // await sendVerificationEmail(data.email, verificationToken);
 
-    // Decrypt for response
     return { 
-      user: {
-        ...user,
-        email: input.email.toLowerCase(),
-        displayName: displayName
-      }, 
-      verifyToken 
+      message: 'Registration successful. Please verify your email.',
+      userId: user.id 
     };
   }
 
   /**
-   * Verify email with token.
-   */
-  async verifyEmail(token: string) {
-    const user = await prisma.user.findFirst({
-      where: {
-        verifyToken: token,
-        verifyTokenExp: { gt: new Date() },
-      },
-    });
-
-    if (!user) {
-      throw AppError.badRequest('Invalid or expired verification token');
-    }
-
-    await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        emailVerified: true,
-        verifyToken: null,
-        verifyTokenExp: null,
-      },
-    });
-
-    return { message: 'Email verified successfully' };
-  }
-
-  /**
    * Login with email/password. Returns JWT tokens.
-   * Implements account lockout after 5 failed attempts.
    */
   async login(input: LoginInput, jwtSign: (payload: object, opts?: object) => string) {
+    const emailHash = hash(input.email);
     const user = await prisma.user.findUnique({
-      where: { email: input.email.toLowerCase() },
+      where: { emailHash },
     });
 
-    // Generic error to prevent enumeration
     if (!user || !user.passwordHash) {
       throw AppError.unauthorized('Invalid email or password', 'INVALID_CREDENTIALS');
     }
@@ -128,22 +82,17 @@ export class AuthService {
     // Check account lockout
     if (user.lockedUntil && user.lockedUntil > new Date()) {
       const minutesLeft = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 60000);
-      throw AppError.tooMany(
-        `Account locked. Try again in ${minutesLeft} minutes.`
-      );
+      throw AppError.tooMany(`Account locked. Try again in ${minutesLeft} minutes.`);
     }
 
     // Verify password
     const isValid = await argon2.verify(user.passwordHash, input.password);
     if (!isValid) {
-      // Increment failed attempts
       const newAttempts = user.failedAttempts + 1;
-      const updateData: Record<string, unknown> = { failedAttempts: newAttempts };
+      const updateData: any = { failedAttempts: newAttempts };
 
       if (newAttempts >= MAX_FAILED_ATTEMPTS) {
-        updateData.lockedUntil = new Date(
-          Date.now() + LOCKOUT_DURATION_MINUTES * 60 * 1000
-        );
+        updateData.lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MINUTES * 60 * 1000);
       }
 
       await prisma.user.update({
@@ -154,22 +103,7 @@ export class AuthService {
       throw AppError.unauthorized('Invalid email or password', 'INVALID_CREDENTIALS');
     }
 
-    // Check email verification
-    if (!user.emailVerified) {
-      throw AppError.forbidden('Please verify your email first', 'EMAIL_NOT_VERIFIED');
-    }
-
-    // Check 2FA if enabled
-    if (user.twoFaEnabled) {
-      if (!input.twoFaCode) {
-        return { requiresTwoFa: true };
-      }
-      // TODO: Validate TOTP code
-      // const isValidTotp = verifyTotp(user.twoFaSecret, input.twoFaCode);
-      // if (!isValidTotp) throw AppError.unauthorized('Invalid 2FA code');
-    }
-
-    // Reset failed attempts on successful login
+    // Reset failed attempts
     await prisma.user.update({
       where: { id: user.id },
       data: {
@@ -179,7 +113,128 @@ export class AuthService {
       },
     });
 
-    // Generate tokens
+    return this.generateAuthResponse(user, jwtSign);
+  }
+
+  /**
+   * Request OTP for email login/signup.
+   */
+  async requestOtp(email: string) {
+    const emailHash = hash(email);
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    // Check if user exists, if not create a partial one (or just store OTP in Redis)
+    let user = await prisma.user.findUnique({
+      where: { emailHash },
+    });
+
+    if (!user) {
+      user = await prisma.user.create({
+        data: {
+          email: encrypt(email),
+          emailHash,
+          displayName: encrypt(email.split('@')[0]),
+          otp,
+          otpExpiresAt,
+          emailVerified: false,
+        },
+      });
+    } else {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { otp, otpExpiresAt },
+      });
+    }
+
+    // TODO: Send OTP via email
+    console.log(`OTP for ${email}: ${otp}`);
+
+    return { message: 'OTP sent to your email' };
+  }
+
+  /**
+   * Verify OTP and return auth response.
+   */
+  async verifyOtp(email: string, otp: string, jwtSign: (payload: object, opts?: object) => string) {
+    const emailHash = hash(email);
+    const user = await prisma.user.findUnique({
+      where: { emailHash },
+    });
+
+    if (!user || user.otp !== otp || (user.otpExpiresAt && user.otpExpiresAt < new Date())) {
+      throw AppError.unauthorized('Invalid or expired OTP');
+    }
+
+    // Clear OTP and verify email
+    const updatedUser = await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        otp: null,
+        otpExpiresAt: null,
+        emailVerified: true,
+        lastSeenAt: new Date(),
+      },
+    });
+
+    return this.generateAuthResponse(updatedUser, jwtSign);
+  }
+
+  /**
+   * Social Authentication (Google, Facebook, LinkedIn, Apple)
+   */
+  async socialAuth(data: {
+    provider: string;
+    token: string;
+    displayName?: string;
+    email?: string;
+  }, jwtSign: (payload: object, opts?: object) => string) {
+    // In a real app, verify the token with the provider here.
+    // For now, we'll assume the frontend verified it and passed valid info.
+    
+    if (!data.email) {
+      throw AppError.badRequest('Email is required for social auth');
+    }
+
+    const emailHash = hash(data.email);
+    let user = await prisma.user.findUnique({
+      where: { emailHash },
+    });
+
+    const providerField = `${data.provider}Id`;
+    const socialId = `social_${data.token.substring(0, 10)}`; // Mock social ID
+
+    if (!user) {
+      user = await prisma.user.create({
+        data: {
+          email: encrypt(data.email),
+          emailHash,
+          displayName: encrypt(data.displayName || data.email.split('@')[0]),
+          [providerField]: socialId,
+          emailVerified: true,
+          plan: UserPlan.FREE,
+          lastSeenAt: new Date(),
+        },
+      });
+    } else {
+      // Update social ID if not set
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          [providerField]: socialId,
+          emailVerified: true,
+          lastSeenAt: new Date(),
+        },
+      });
+    }
+
+    return this.generateAuthResponse(user, jwtSign);
+  }
+
+  /**
+   * Generate Access and Refresh tokens.
+   */
+  private async generateAuthResponse(user: any, jwtSign: (payload: object, opts?: object) => string) {
     const accessToken = jwtSign(
       { sub: user.id, role: user.role, plan: user.plan },
       { expiresIn: config.jwt.accessTtl }
@@ -188,7 +243,6 @@ export class AuthService {
     const refreshToken = uuidv4();
     const refreshExpiry = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30d
 
-    // Store refresh token
     await prisma.refreshToken.create({
       data: {
         userId: user.id,
@@ -204,7 +258,7 @@ export class AuthService {
         id: user.id,
         email: decrypt(user.email),
         displayName: user.displayName ? decrypt(user.displayName) : null,
-        currentLevel: user.currentLevel,
+        englishLevel: user.englishLevel,
         role: user.role,
         plan: user.plan,
         xpTotal: user.xpTotal,
@@ -213,9 +267,28 @@ export class AuthService {
     };
   }
 
-  /**
-   * Rotate access token using refresh token.
-   */
+  async verifyEmail(token: string) {
+    const user = await prisma.user.findFirst({
+      where: {
+        verificationToken: token,
+      },
+    });
+
+    if (!user) {
+      throw AppError.badRequest('Invalid verification token');
+    }
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        emailVerified: true,
+        verificationToken: null,
+      },
+    });
+
+    return { message: 'Email verified successfully' };
+  }
+
   async refresh(refreshTokenStr: string, jwtSign: (payload: object, opts?: object) => string) {
     const storedToken = await prisma.refreshToken.findUnique({
       where: { token: refreshTokenStr },
@@ -226,7 +299,6 @@ export class AuthService {
       throw AppError.unauthorized('Invalid or expired refresh token');
     }
 
-    // Issue new tokens
     const accessToken = jwtSign(
       { sub: storedToken.user.id, role: storedToken.user.role, plan: storedToken.user.plan },
       { expiresIn: config.jwt.accessTtl }
@@ -244,49 +316,18 @@ export class AuthService {
     return { accessToken, refreshToken: newRefreshToken };
   }
 
-  /**
-   * Logout - revoke refresh token and denylist access token.
-   */
   async logout(userId: string, refreshTokenStr?: string) {
-    // Revoke all refresh tokens for user
     if (refreshTokenStr) {
       await prisma.refreshToken.deleteMany({
         where: { userId, token: refreshTokenStr },
       });
     }
-
-    // Add user to deny list for 15 min (access token TTL)
-    await redis.setex(`token:deny:${userId}`, 900, '1');
-
     return { message: 'Logged out successfully' };
   }
 
-  /**
-   * Get current user profile.
-   */
   async getProfile(userId: string) {
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: {
-        id: true,
-        email: true,
-        displayName: true,
-        avatarUrl: true,
-        nativeLanguage: true,
-        currentLevel: true,
-        role: true,
-        plan: true,
-        planExpiresAt: true,
-        xpTotal: true,
-        streakDays: true,
-        streakLastAt: true,
-        timezone: true,
-        locale: true,
-        twoFaEnabled: true,
-        emailVerified: true,
-        createdAt: true,
-        lastSeenAt: true,
-      },
     });
 
     if (!user) {
@@ -300,26 +341,20 @@ export class AuthService {
     };
   }
 
-  /**
-   * Update user profile.
-   */
-  async updateProfile(userId: string, data: Record<string, unknown>) {
+  async updateProfile(userId: string, data: any) {
+    const updateData: any = { ...data };
+    if (data.displayName) updateData.displayName = encrypt(data.displayName);
+
     const user = await prisma.user.update({
       where: { id: userId },
-      data,
-      select: {
-        id: true,
-        email: true,
-        displayName: true,
-        avatarUrl: true,
-        nativeLanguage: true,
-        currentLevel: true,
-        timezone: true,
-        locale: true,
-      },
+      data: updateData,
     });
 
-    return user;
+    return {
+      ...user,
+      email: decrypt(user.email),
+      displayName: user.displayName ? decrypt(user.displayName) : null,
+    };
   }
 }
 

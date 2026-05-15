@@ -5,11 +5,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { useAuthStore } from "@/stores/auth";
-import { Mic, Mail, Lock, User, Eye, EyeOff, AlertCircle, Loader2, CheckCircle2 } from "lucide-react";
+import { Mic, Mail, Lock, User, Eye, EyeOff, AlertCircle, Loader2, CheckCircle2, Globe, Users, Briefcase } from "lucide-react";
 
 export default function RegisterPage() {
   const router = useRouter();
   const register = useAuthStore((s) => s.register);
+  const socialAuth = useAuthStore((s) => s.socialAuth);
 
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
@@ -37,6 +38,19 @@ export default function RegisterPage() {
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Registration failed";
       setError(message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSocialAuth = async (provider: string) => {
+    setError("");
+    setLoading(true);
+    try {
+      await socialAuth(provider, "mock_token_" + Date.now(), `${provider}_user@example.com`, `${provider} User`);
+      router.push("/dashboard");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Social signup failed");
     } finally {
       setLoading(false);
     }
@@ -90,11 +104,11 @@ export default function RegisterPage() {
       </div>
 
       {/* Right Panel */}
-      <div className="flex-1 flex items-center justify-center p-8 bg-[hsl(var(--background))]">
+      <div className="flex-1 flex items-center justify-center p-8 bg-[hsl(var(--background))] overflow-y-auto">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="w-full max-w-md"
+          className="w-full max-w-md py-8"
         >
           <div className="lg:hidden flex items-center gap-2 mb-8">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center">
@@ -107,6 +121,36 @@ export default function RegisterPage() {
           <p className="text-[hsl(var(--muted-foreground))] mb-8">
             Start practicing English for free today.
           </p>
+
+          <div className="grid grid-cols-3 gap-3 mb-8">
+            <button
+              onClick={() => handleSocialAuth("google")}
+              className="flex items-center justify-center py-2.5 rounded-xl bg-[hsl(var(--muted))] border border-[hsl(var(--border))] hover:bg-[hsl(var(--border))] transition-colors"
+            >
+              <Globe className="w-5 h-5 text-red-500" />
+            </button>
+            <button
+              onClick={() => handleSocialAuth("facebook")}
+              className="flex items-center justify-center py-2.5 rounded-xl bg-[hsl(var(--muted))] border border-[hsl(var(--border))] hover:bg-[hsl(var(--border))] transition-colors"
+            >
+              <Users className="w-5 h-5 text-blue-600" />
+            </button>
+            <button
+              onClick={() => handleSocialAuth("linkedin")}
+              className="flex items-center justify-center py-2.5 rounded-xl bg-[hsl(var(--muted))] border border-[hsl(var(--border))] hover:bg-[hsl(var(--border))] transition-colors"
+            >
+              <Briefcase className="w-5 h-5 text-blue-700" />
+            </button>
+          </div>
+
+          <div className="relative mb-8">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-[hsl(var(--border))]"></div>
+            </div>
+            <div className="relative flex justify-center text-xs uppercase">
+              <span className="bg-[hsl(var(--background))] px-2 text-[hsl(var(--muted-foreground))]">Or signup with email</span>
+            </div>
+          </div>
 
           {error && (
             <motion.div
@@ -205,7 +249,7 @@ export default function RegisterPage() {
             </button>
           </form>
 
-          <p className="mt-6 text-center text-sm text-[hsl(var(--muted-foreground))]">
+          <p className="mt-8 text-center text-sm text-[hsl(var(--muted-foreground))]">
             Already have an account?{" "}
             <Link href="/login" className="text-violet-400 hover:text-violet-300 font-medium">
               Sign in

@@ -20,7 +20,8 @@ export function encrypt(text: string): string {
   }
 
   const iv = crypto.randomBytes(IV_LENGTH);
-  const cipher = crypto.createCipheriv(ALGORITHM, Buffer.from(key, 'hex'), iv);
+  const validKey = crypto.createHash('sha256').update(key).digest();
+  const cipher = crypto.createCipheriv(ALGORITHM, validKey, iv);
   
   let encrypted = cipher.update(text, 'utf8', 'base64');
   encrypted += cipher.final('base64');
@@ -52,7 +53,8 @@ export function decrypt(encryptedText: string): string {
   const authTag = Buffer.from(parts[1], 'base64');
   const content = parts[2];
 
-  const decipher = crypto.createDecipheriv(ALGORITHM, Buffer.from(key, 'hex'), iv);
+  const validKey = crypto.createHash('sha256').update(key).digest();
+  const decipher = crypto.createDecipheriv(ALGORITHM, validKey, iv);
   decipher.setAuthTag(authTag);
   
   let decrypted = decipher.update(content, 'base64', 'utf8');

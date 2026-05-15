@@ -32,6 +32,23 @@ export const verifyEmailSchema = z.object({
   token: z.string().min(1),
 });
 
+export const requestOtpSchema = z.object({
+  email: z.string().email(),
+});
+
+export const verifyOtpSchema = z.object({
+  email: z.string().email(),
+  otp: z.string().length(6),
+});
+
+export const socialAuthSchema = z.object({
+  provider: z.enum(['google', 'facebook', 'linkedin', 'apple']),
+  token: z.string().min(1),
+  displayName: z.string().optional(),
+  email: z.string().email().optional(),
+});
+
+
 // ─── User Schemas ──────────────────────────────────────────────────
 
 export const updateProfileSchema = z.object({

@@ -75,6 +75,12 @@ enum ScenarioDifficulty {
 
 // ── MODELS ─────────────────────────────────────────────────────────────────
 
+enum UserRole {
+  USER
+  ADMIN
+  COACH
+}
+
 model User {
   id                   String            @id @default(uuid()) @db.Uuid
   displayName          String            @map("display_name") @db.VarChar(100)
@@ -84,11 +90,19 @@ model User {
   emailHash            String            @unique @map("email_hash") // Blind index for lookups
   passwordHash         String?           @map("password_hash") @db.VarChar(255)
   
+  // Social Auth IDs
   googleId             String?           @unique @map("google_id")
+  facebookId           String?           @unique @map("facebook_id")
+  linkedinId           String?           @unique @map("linkedin_id")
   appleId              String?           @unique @map("apple_id")
+  
+  // OTP Auth
+  otp                  String?           @db.VarChar(10)
+  otpExpiresAt         DateTime?         @map("otp_expires_at")
   
   nativeLanguage       String            @default("ta") @map("native_language") @db.VarChar(10)
   englishLevel         Int               @default(1) @map("english_level") @db.SmallInt // 1-10
+  role                 UserRole          @default(USER)
   profession           String?           @db.VarChar(100)
   interests            String[]
   locationCity         String?           @map("location_city") @db.VarChar(100)
@@ -109,13 +123,20 @@ model User {
   isDiscoverable       Boolean           @default(true) @map("is_discoverable")
   isBanned             Boolean           @default(false) @map("is_banned")
   
+  failedAttempts       Int               @default(0) @map("failed_attempts")
+  lockedUntil          DateTime?         @map("locked_until")
   lastSeenAt           DateTime?         @map("last_seen_at")
   fcmToken             String?           @map("fcm_token")
   deviceInfo           Json?             @map("device_info")
   preferences          Json              @default("{}")
   
+  timezone             String?           @db.VarChar(50)
+  locale               String?           @db.VarChar(10)
+  
   emailVerified        Boolean           @default(false) @map("email_verified")
   verificationToken    String?           @map("verification_token")
+  twoFaEnabled         Boolean           @default(false) @map("two_fa_enabled")
+  twoFaSecret          String?           @map("two_fa_secret")
   
   createdAt            DateTime          @default(now()) @map("created_at")
   updatedAt            DateTime          @updatedAt @map("updated_at")
@@ -134,11 +155,24 @@ model User {
   targetConnections    PartnerConnection[] @relation("Target")
   userProgress         UserProgress[]
   auditLogs            AuditLog[]
+  refreshTokens        RefreshToken[]
 
-  @@index([email])
+  @@index([emailHash])
   @@index([plan, planExpiresAt])
   @@index([isDiscoverable, englishLevel])
 }
+
+model RefreshToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  token     String   @unique
+  userId    String   @map("user_id") @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+}
+
 
 model Subscription {
   id                      String             @id @default(uuid()) @db.Uuid

@@ -71,6 +71,27 @@ class ApiClient {
     }>('POST', '/auth/login', { email, password });
   }
 
+  async requestOtp(email: string) {
+    return this.request<{ message: string }>('POST', '/auth/request-otp', { email });
+  }
+
+  async verifyOtp(email: string, otp: string) {
+    return this.request<{
+      accessToken: string;
+      refreshToken: string;
+      user: UserProfile;
+    }>('POST', '/auth/verify-otp', { email, otp });
+  }
+
+  async socialAuth(data: { provider: string; token: string; email?: string; displayName?: string }) {
+    return this.request<{
+      accessToken: string;
+      refreshToken: string;
+      user: UserProfile;
+    }>('POST', '/auth/social', data);
+  }
+
+
   async refreshToken(refreshToken: string) {
     return this.request<{ accessToken: string; refreshToken: string }>(
       'POST',

@@ -10,12 +10,16 @@ interface AuthState {
   isLoading: boolean;
 
   login: (email: string, password: string) => Promise<void>;
+  requestOtp: (email: string) => Promise<void>;
+  verifyOtp: (email: string, otp: string) => Promise<void>;
+  socialAuth: (provider: string, token: string, email?: string, displayName?: string) => Promise<void>;
   register: (email: string, password: string, displayName?: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshAuth: () => Promise<void>;
   setUser: (user: UserProfile) => void;
   hydrate: () => Promise<void>;
 }
+
 
 export const useAuthStore = create<AuthState>()(
   persist(
@@ -41,6 +45,35 @@ export const useAuthStore = create<AuthState>()(
       register: async (email: string, password: string, displayName?: string) => {
         await api.register({ email, password, displayName: displayName || "" });
       },
+
+      requestOtp: async (email: string) => {
+        await api.requestOtp(email);
+      },
+
+      verifyOtp: async (email: string, otp: string) => {
+        const { data } = await api.verifyOtp(email, otp);
+        api.setToken(data.accessToken);
+        set({
+          user: data.user,
+          accessToken: data.accessToken,
+          refreshToken: data.refreshToken,
+          isAuthenticated: true,
+          isLoading: false,
+        });
+      },
+
+      socialAuth: async (provider: string, token: string, email?: string, displayName?: string) => {
+        const { data } = await api.socialAuth({ provider, token, email, displayName });
+        api.setToken(data.accessToken);
+        set({
+          user: data.user,
+          accessToken: data.accessToken,
+          refreshToken: data.refreshToken,
+          isAuthenticated: true,
+          isLoading: false,
+        });
+      },
+
 
       logout: async () => {
         try {

@@ -59,11 +59,11 @@ async function authPlugin(fastify: FastifyInstance) {
         // Check if user is still active
         const user = await prisma.user.findUnique({
           where: { id: payload.sub },
-          select: { isActive: true, role: true, plan: true },
+          select: { isBanned: true, role: true, plan: true },
         });
 
-        if (!user || !user.isActive) {
-          throw AppError.unauthorized('Account is deactivated');
+        if (!user || user.isBanned) {
+          throw AppError.unauthorized('Account is deactivated or banned');
         }
 
         request.userId = payload.sub;

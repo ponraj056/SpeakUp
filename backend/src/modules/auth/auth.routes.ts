@@ -6,6 +6,9 @@ import {
   refreshSchema,
   verifyEmailSchema,
   updateProfileSchema,
+  requestOtpSchema,
+  verifyOtpSchema,
+  socialAuthSchema,
 } from '../../shared/schemas';
 import { sendSuccess } from '../../shared/response';
 
@@ -33,6 +36,31 @@ export async function authRoutes(fastify: FastifyInstance) {
     return sendSuccess(reply, result);
   });
 
+  /** POST /auth/request-otp */
+  fastify.post('/request-otp', async (request, reply) => {
+    const { email } = requestOtpSchema.parse(request.body);
+    const result = await authService.requestOtp(email);
+    return sendSuccess(reply, result);
+  });
+
+  /** POST /auth/verify-otp */
+  fastify.post('/verify-otp', async (request, reply) => {
+    const { email, otp } = verifyOtpSchema.parse(request.body);
+    const result = await authService.verifyOtp(email, otp, (payload, opts) =>
+      fastify.jwt.sign(payload, opts)
+    );
+    return sendSuccess(reply, result);
+  });
+
+  /** POST /auth/social */
+  fastify.post('/social', async (request, reply) => {
+    const body = socialAuthSchema.parse(request.body);
+    const result = await authService.socialAuth(body, (payload, opts) =>
+      fastify.jwt.sign(payload, opts)
+    );
+    return sendSuccess(reply, result);
+  });
+
   /** POST /auth/refresh */
   fastify.post('/refresh', async (request, reply) => {
     const { refreshToken } = refreshSchema.parse(request.body);
@@ -51,7 +79,7 @@ export async function authRoutes(fastify: FastifyInstance) {
     return sendSuccess(reply, result);
   });
 
-  /** GET /users/me */
+  /** GET /auth/me */
   fastify.get('/me', {
     preHandler: [fastify.authenticate],
   }, async (request, reply) => {
@@ -59,7 +87,7 @@ export async function authRoutes(fastify: FastifyInstance) {
     return sendSuccess(reply, user);
   });
 
-  /** PATCH /users/me */
+  /** PATCH /auth/me */
   fastify.patch('/me', {
     preHandler: [fastify.authenticate],
   }, async (request, reply) => {
